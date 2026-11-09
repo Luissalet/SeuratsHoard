@@ -15,6 +15,7 @@ Every round is kept in the job log with its render, and the result is saved as a
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -31,14 +32,14 @@ from .images import Indexed, index_picture, to_png
 from .llm import ModelClient, parse_json
 from .program import ProgramError, run_program
 from .palette import DEFAULT_PALETTE, merge
-from .render import ortho, png_bytes, sheet
+from .render import ortho, png_bytes, render, sheet
 from .voxels import KEY_CHARS, MAX_SIDE, VoxelModel, apply_ops, norm_hex
 
 log = logging.getLogger("seurat.generate")
 
 ROLES = ("front", "side", "top", "back", "extra")
 STARTS = ("auto", "inflate", "hull", "extrude", "empty", "current")
-METHODS = ("code", "ops")
+METHODS = ("agent", "code", "ops")
 
 OPS_GUIDE = """OPERATIONS (JSON objects, applied in order; c is a palette index, c:0 erases with the same shape):
 SHAPE (use these to build volumes; most models need only these):
@@ -181,6 +182,15 @@ faces +z):
 5. What must read from the side and from above (depth, overlaps), and the common mistakes to avoid for this subject.
 
 ANSWER: ONE JSON object {"brief": "<the brief, plain text, as long as it needs>"}"""
+
+AGENT_SYSTEM = CODE_SYSTEM.split("ANSWER: ONE JSON object")[0] + """YOU WORK IN A LOOP, LIKE A CAREFUL ARTIST AT THE MACHINE. Each answer is ONE JSON object with one action:
+- {"action": "run", "notes": "what this version changes", "code": "<the COMPLETE program>"}: Seurat runs it and answers
+  with the result (voxel count, colours) and a contact sheet, or with the error and the failing line.
+- {"action": "look", "view": "iso" | "iso_front_left" | "iso_back_left" | "iso_back_right" | "front" | "back" | "left" |
+  "right" | "top", "notes": "what you want to check"}: a large picture of the current model from that side.
+- {"action": "done", "notes": "why it is finished"}: when the model is excellent.
+Run early (a first complete version), then look at it critically from several sides, fix what is wrong and refine the
+details, run again, and so on. Errors are normal: read the failing line and fix it. Every run is the whole program."""
 
 CODE_REVIEW = """Round {round} of {rounds}. Your previous program (below) built the model in the LAST picture: a contact
 sheet with flat views (front, left, top, back) and two isometric views. The other pictures are the references.
@@ -396,9 +406,9 @@ class Generator:
                 # The model sculpts from nothing: the instant builders make flat slabs from angled sprites.
                 fallback = ("hull" if side is not None else "inflate") if front is not None else ""
                 start = "empty" if use_model else fallback
-            if method == "code":
+            if method in ("code", "agent"):
                 start = "empty"
-            if start == "empty" and method == "code":
+            if start == "empty" and method in ("code", "agent"):
                 side_n = int(settings["code_size"])
                 size = [min(MAX_SIDE, max(8, int(v))) for v in (p.get("size") or [side_n, side_n, side_n])]
                 model = VoxelModel.empty("tmp", name, size, palette)
@@ -413,7 +423,7 @@ class Generator:
                 model = builders.build(start, front, side=side, top=top, depth=depth, name=name, base_palette=palette)
             if depth and model.size[2] < depth:
                 model.resize([model.size[0], model.size[1], depth])
-        if method == "code" and not into:
+        if method in ("code", "agent") and not into:
             # Each working program is saved as it comes, so a crash or a restart part-way loses nothing.
             model.id, model.name = self.svc.store.new_id(), name
         job.say(f"modelo inicial: {start}, {model.size[0]}x{model.size[1]}x{model.size[2]}, {model.count} voxels")
@@ -422,7 +432,9 @@ class Generator:
         llm_name = ""
         if use_model and not job.cancel.is_set():
             try:
-                if method == "code":
+                if method == "agent":
+                    llm_name = self._agent_loop(job, model, refs, p, ref_colors)
+                elif method == "code":
                     llm_name = self._code_rounds(job, model, refs, rounds, p, ref_colors)
                 else:
                     llm_name = self._model_rounds(job, model, refs, rounds, start, p)
@@ -447,7 +459,7 @@ class Generator:
             job.say("cancelado: se guarda lo que había")
 
         # ---- save
-        program = (model.source or {}).get("program") if method == "code" else None
+        program = (model.source or {}).get("program") if method in ("code", "agent") else None
         if into:
             target = self.svc.store.get(into)
             target.grid, target.palette = model.grid, model.palette
@@ -612,29 +624,14 @@ class Generator:
             lines.append("Colours seen in the pictures (hints only): " + ", ".join(ref_colors[:24]))
         if not refs:
             lines.append("There are no pictures: build it from the description.")
-        # ---- the design brief: understand the subject in writing before any code
-        job.say("el modelo piensa el encargo y escribe el brief de diseño")
-
-        def brief_progress(n_text: int, n_reason: int) -> None:
-            job.step = "brief de diseño · " + (f"pensando: {n_reason} tokens" if n_reason and not n_text else f"escribiendo: {n_text} tokens")
-
-        b_answer = client.chat(BRIEF_SYSTEM, "\n".join(lines), list(ref_images), max_tokens=max_tokens, effort=effort,
-                               timeout=timeout, on_progress=brief_progress, cancel=job.cancel, thinking_tokens=thinking_tokens)
-        if b_answer.finish == "cancelled":
-            return b_answer.model or ""
-        try:
-            brief = str(parse_json(b_answer.text).get("brief") or "").strip()
-        except ValueError:
-            brief = b_answer.text.strip()
-        brief = brief[:20000]
-        self._save_answer(job, 0, brief, suffix="-brief")
-        job.brief = brief
-        job.say(f"brief listo ({len(brief.split())} palabras, {b_answer.seconds:.0f} s)")
+        brief, b_model, cancelled = self._write_brief(job, client, lines, ref_images, effort, max_tokens, thinking_tokens, timeout)
+        if cancelled:
+            return b_model
         if brief:
             lines.append("\nDESIGN BRIEF (follow it):\n" + brief)
         text = "\n".join(lines)
         images = list(ref_images)
-        llm_name, good_code, total = b_answer.model or "", "", 1 + rounds
+        llm_name, good_code, total = b_model, "", 1 + rounds
         for rnd in range(1, total + 1):
             if job.cancel.is_set():
                 break
@@ -728,6 +725,161 @@ class Generator:
                                       code=(code if problem and code and not good_code else base))
             text = "\n".join(lines) + "\n\n" + text
             images = list(ref_images) + ([png_bytes(sheet(model, 900))] if model.count else [])
+        return llm_name
+
+    def _write_brief(self, job: Job, client: ModelClient, lines: list[str], ref_images: list[bytes], effort, max_tokens: int,
+                     thinking_tokens: int, timeout: float) -> tuple[str, str, bool]:
+        """The design brief: the model understands the subject in writing before any code."""
+        job.say("el modelo piensa el encargo y escribe el brief de diseño")
+
+        def brief_progress(n_text: int, n_reason: int) -> None:
+            job.step = "brief de diseño · " + (f"pensando: {n_reason} tokens" if n_reason and not n_text else f"escribiendo: {n_text} tokens")
+
+        b_answer = client.chat(BRIEF_SYSTEM, "\n".join(lines), list(ref_images), max_tokens=max_tokens, effort=effort,
+                               timeout=timeout, on_progress=brief_progress, cancel=job.cancel, thinking_tokens=thinking_tokens)
+        if b_answer.finish == "cancelled":
+            return "", b_answer.model or "", True
+        try:
+            brief = str(parse_json(b_answer.text).get("brief") or "").strip()
+        except ValueError:
+            brief = b_answer.text.strip()
+        brief = brief[:20000]
+        self._save_answer(job, 0, brief, suffix="-brief")
+        job.brief = brief
+        job.say(f"brief listo ({len(brief.split())} palabras, {b_answer.seconds:.0f} s)")
+        return brief, b_answer.model or "", False
+
+    @staticmethod
+    def _content(text: str, images: list[bytes]) -> list[dict[str, Any]]:
+        import base64
+        parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
+        for img in images:
+            parts.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(img).decode()}})
+        return parts
+
+    def _agent_loop(self, job: Job, model: VoxelModel, refs: dict, p: dict[str, Any], ref_colors: list[str]) -> str:
+        """The model works in a loop with tools, like an agent harness: it runs its program, gets the result or the error,
+        looks at the model from any side, fixes and refines, and says when it is finished (or the step and time budgets
+        end). Each run that works is saved."""
+        settings = self.svc.settings
+        client: ModelClient = self.svc.llm
+        effort = p.get("effort") or settings["effort"]
+        max_tokens = int(settings["max_tokens"])
+        thinking_tokens = int(settings["thinking_tokens"])
+        step_thinking = int(settings["agent_step_thinking"])
+        timeout = float(settings["timeout_s"])
+        max_steps = int(p.get("steps") or settings["agent_steps"])
+        deadline = time.time() + 60 * float(p.get("minutes") or settings["agent_minutes"])
+        ref_images = [img for role in ROLES for _, _, img in refs.get(role, [])][:4]
+        sx, sy, sz = model.size
+        lines = [f"Build a voxel model in a grid of size X={sx}, Y={sy}, Z={sz}."]
+        if p.get("prompt"):
+            lines.append("What the user wants: " + str(p["prompt"]).strip())
+        for role in ROLES:
+            for meta, ix, _ in refs.get(role, []):
+                lines.append(f"Reference picture '{meta.get('name')}' ({role}, {meta.get('width')}x{meta.get('height')} px).")
+        if ref_colors:
+            lines.append("Colours seen in the pictures (hints only): " + ", ".join(ref_colors[:24]))
+        if not refs:
+            lines.append("There are no pictures: build it from the description.")
+        brief, llm_name, cancelled = self._write_brief(job, client, lines, ref_images, effort, max_tokens, thinking_tokens, timeout)
+        if cancelled:
+            return llm_name
+        if brief:
+            lines.append("\nDESIGN BRIEF (follow it):\n" + brief)
+        lines.append(f"\nYou have up to {max_steps} actions and about {int((deadline - time.time()) / 60)} minutes. Start by running a first complete program.")
+        history: list[dict[str, Any]] = []
+        user_text, user_images = "\n".join(lines), list(ref_images)
+        last_code, runs = "", 0
+        for step in range(1, max_steps + 1):
+            if job.cancel.is_set():
+                break
+            left = deadline - time.time()
+            if left <= 0:
+                job.say("se acabó el tiempo del agente")
+                break
+            if step == max_steps or left < 300:
+                user_text += "\n\nThis is your LAST action: answer a final {\"action\": \"run\"} with your best complete program (or {\"action\": \"done\"} if the current model is already your best)."
+            label = f"paso {step} de {max_steps}"
+
+            def progress(n_text: int, n_reason: int, label=label) -> None:
+                job.step = f"{label} · " + (f"pensando: {n_reason} tokens" if n_reason and not n_text else
+                                            f"escribiendo: {n_text} tokens" + (f" (tras pensar {n_reason})" if n_reason else ""))
+
+            job.say(label + ": el modelo decide")
+            answer = client.chat(AGENT_SYSTEM, user_text, user_images, max_tokens=max_tokens, effort=effort, timeout=timeout,
+                                 on_progress=progress, cancel=job.cancel, thinking_tokens=step_thinking, history=history)
+            llm_name = answer.model or llm_name
+            if answer.finish == "cancelled":
+                break
+            self._save_answer(job, step, answer.text, suffix="-agent")
+            try:
+                data = parse_json(answer.text)
+            except ValueError:
+                data = {}
+            action = str(data.get("action") or ("run" if data.get("code") else "")).lower()
+            notes = str(data.get("notes") or "")[:600]
+            # what the model said goes into the conversation (without the thinking); old pictures are dropped
+            history.append({"role": "user", "content": self._content(user_text, user_images)})
+            history.append({"role": "assistant", "content": json.dumps({k: data.get(k) for k in ("action", "notes", "view") if data.get(k)}
+                                                                       | ({"code": "<the program, shown in the next message>"} if data.get("code") else {}))})
+            for msg in history[:-4]:
+                if isinstance(msg.get("content"), list):
+                    msg["content"] = [part for part in msg["content"] if part.get("type") == "text"]
+            job.say(f"{label}: {action or 'respuesta sin acción'}" + (f" — {notes[:160]}" if notes else "")
+                    + f" ({answer.seconds:.0f} s" + (f", pensó {answer.reasoning_tokens}" if answer.reasoning_tokens else "") + ")")
+            if action == "done":
+                if model.count:
+                    job.say("el modelo da el resultado por terminado")
+                    break
+                user_text, user_images = "There is no model yet: run a complete program first.", []
+                continue
+            if action == "look":
+                view = str(data.get("view") or "iso")
+                view = view if view in ("iso", "iso_front_left", "iso_back_left", "iso_back_right", "front", "back", "left", "right", "top", "bottom") else "iso"
+                if not model.count:
+                    user_text, user_images = "There is no model yet: run a program first.", []
+                    continue
+                img = png_bytes(render(model, view, size=None, background="dark"))
+                user_text, user_images = f"Here is the current model from {view}. Next action?", [img]
+                continue
+            code = data.get("code") if isinstance(data.get("code"), str) else ""
+            if action != "run" or not code.strip():
+                user_text, user_images = ("Your answer had no valid action. Answer ONE JSON object with action run (and the complete "
+                                          "code), look (and a view) or done."), []
+                continue
+            runs += 1
+            self._save_answer(job, step, code, suffix=".py")
+            history[-1]["content"] = json.dumps({"action": "run", "notes": notes, "code": code})
+            try:
+                res = run_program(code, model.size, timeout=float(settings["program_timeout_s"]))
+            except ProgramError as exc:
+                job.say(f"{label}: el programa falló ({exc.message[:160]})")
+                self._record(job, step, notes, {"applied": 0, "errors": [exc.message[:300]]}, model)
+                user_text, user_images = (f"The program FAILED: {exc.message}\n{exc.trace}\nFix it and run again (the model shown "
+                                          "before, if any, is unchanged)."), []
+                continue
+            if res.count == 0:
+                job.say(f"{label}: el programa no puso ningún voxel")
+                user_text, user_images = "The program ran but left the grid EMPTY. Fix it.", []
+                continue
+            model.grid, model.palette = res.grid, res.palette
+            model.source = {**(model.source or {}), "program": code}
+            last_code = code
+            job.say(f"{label}: {res.count} voxels, {len(res.palette)} colores")
+            self._record(job, step, notes, {"applied": 1, "errors": []}, model)
+            if model.id and model.id != "tmp" and not p.get("into"):
+                model.source = {**model.source, "kind": "generated", "method": "agent", "job": job.id, "brief": job.brief,
+                                "prompt": p.get("prompt") or "", "partial": True}
+                self.svc.store.save(model, version_note=f"generation {job.id} step {step}")
+                job.model_id, job.model_name = model.id, model.name
+            user_text = (f"It ran: {res.count} voxels, {len(res.palette)} colours, bounds {model.bounds()}. The picture is a contact "
+                         "sheet (front, left, top, back, two isometric views). Judge it against the brief: would someone recognise "
+                         "it at once from every side? Next action: run an improved complete program, look closer from a side, or "
+                         "done if it is excellent.")
+            user_images = [png_bytes(sheet(model, 1100))]
+        if not last_code and not model.count:
+            raise SeuratError("failed", "The model never produced a working program.")
         return llm_name
 
     @staticmethod

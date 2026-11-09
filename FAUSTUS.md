@@ -15,7 +15,11 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
 - Read reference pictures (PNG, JPG, GIF, WebP, BMP): crop, flat background to transparent, pixel-art scale undone,
   reduced to a size and a number of colours (`reference_grid`).
 - Instant models from pictures: inflate, extrude, hull (front + side + optional top).
-- Voxel programs (default generation method `code`): first the model writes a design brief (what the subject is from its
+- Agent generations (default method `agent`): after the design brief the model works in a tool loop with the conversation
+  kept: actions `run` (complete program; answer = voxel count and a contact sheet, or the error and failing line), `look`
+  (large render from any side) and `done`; budgets `agent_steps` (16), `agent_minutes` (90) and `agent_step_thinking`
+  (30 000 per action). Each working run is saved; the program and brief stay in the source.
+- Voxel programs in fixed rounds (method `code`): first the model writes a design brief (what the subject is from its
   own knowledge and the description, parts with sizes and x/y/z positions, palette, what must read from each side;
   pictures are only hints, never traced), shown in the job and kept in `source.brief`; then it writes Python (`PALETTE` + `build(g)`, helpers ellipsoid,
   sphere, capsule, box, polygon, mirror_x, shade_by_height; numpy masks over xs/ys/zs), run by `program.py` in a separate

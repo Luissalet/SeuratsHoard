@@ -244,7 +244,7 @@ def test_code_generation_runs_the_program_and_keeps_it(tmp_path):
     link = CodeLink()
     svc = Services(cfg, link_factory=lambda: link)
     with TestClient(create_app(cfg, services=svc), base_url="http://127.0.0.1:5250", client=("127.0.0.1", 50000)) as c:
-        job = c.post("/api/generate", json={"prompt": "a small bird", "rounds": 2, "size": [24, 24, 24]}).json()
+        job = c.post("/api/generate", json={"prompt": "a small bird", "rounds": 2, "size": [24, 24, 24], "method": "code"}).json()
         st = c.get(f"/api/jobs/{job['job_id']}").json()
         assert st["status"] == "done", st
         assert not st["rounds"][1]["errors"] and any("se pide el arreglo" in l["text"] for l in st["log"])   # fixed in place
@@ -283,3 +283,46 @@ def test_model_program_tool(app_client):
     assert m["source"]["program"] == code
     bad = c.post("/api/ui/call", json={"name": "model_program", "arguments": {"code": "PALETTE=['#fff']\ndef build(g):\n    import os\n"}}).json()
     assert "not allowed" in json.dumps(bad)
+
+
+class AgentLink(FakeLink):
+    """An agent: a failing run, a working run, a look, done."""
+
+    def chat(self, messages, images=None, **kw):
+        if messages[0]["content"].startswith("You are a voxel art director"):
+            return SimpleNamespace(text=json.dumps({"brief": "A round bird."}), model="deepseek-v4.1-flash")
+        self.calls.append({"messages": messages, "images": images or [], **kw})
+        n = len(self.calls)
+        good = ("PALETTE = ['#f0f0f0']\ndef build(g):\n    ellipsoid(g, 1, (X/2, Y/2, Z/2), (X/3, Y/4, Z/3))\n")
+        answers = [{"action": "run", "notes": "first", "code": "PALETTE = ['#fff']\ndef build(g):\n    g[ys <= gx] = 1\n"},
+                   {"action": "run", "notes": "fixed", "code": good},
+                   {"action": "look", "view": "left", "notes": "check depth"},
+                   {"action": "done", "notes": "good"}]
+        return SimpleNamespace(text=json.dumps(answers[min(n, 4) - 1]), model="deepseek-v4.1-flash")
+
+
+def test_agent_generation_runs_looks_and_stops(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from seurat_hoard.config import Config
+    from seurat_hoard.main import create_app
+    from seurat_hoard.services import Services
+
+    cfg = Config(data_dir=tmp_path / "data", port=5250, data_dir_configured=True, background=False)
+    link = AgentLink()
+    svc = Services(cfg, link_factory=lambda: link)
+    with TestClient(create_app(cfg, services=svc), base_url="http://127.0.0.1:5250", client=("127.0.0.1", 50000)) as c:
+        job = c.post("/api/generate", json={"prompt": "a bird", "size": [16, 12, 16], "method": "agent", "steps": 8}).json()
+        st = c.get(f"/api/jobs/{job['job_id']}").json()
+        assert st["status"] == "done", st
+        assert len(link.calls) == 4 and any("terminado" in l["text"] for l in st["log"])
+        second = link.calls[1]["messages"][-1]["content"]
+        text = second[0]["text"] if isinstance(second, list) else second
+        assert "FAILED" in text and "line" in text
+        third_imgs = link.calls[2]["images"]
+        assert third_imgs                                     # the contact sheet after a working run
+        assert link.calls[3]["images"]                        # the look picture
+        hist = link.calls[3]["messages"]
+        assert any(m["role"] == "assistant" and "ellipsoid" in str(m["content"]) for m in hist)   # its own code is remembered
+        model = c.get(f"/api/models/{st['model_id']}").json()
+        assert model["count"] > 50 and model["source"]["method"] == "agent" and "ellipsoid" in model["source"]["program"]

@@ -15,7 +15,9 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
 - Read reference pictures (PNG, JPG, GIF, WebP, BMP): crop, flat background to transparent, pixel-art scale undone,
   reduced to a size and a number of colours (`reference_grid`).
 - Instant models from pictures: inflate, extrude, hull (front + side + optional top).
-- Voxel programs (default generation method `code`): the model writes Python (`PALETTE` + `build(g)`, helpers ellipsoid,
+- Voxel programs (default generation method `code`): first the model writes a design brief (what the subject is from its
+  own knowledge and the description, parts with sizes and x/y/z positions, palette, what must read from each side;
+  pictures are only hints, never traced), shown in the job and kept in `source.brief`; then it writes Python (`PALETTE` + `build(g)`, helpers ellipsoid,
   sphere, capsule, box, polygon, mirror_x, shade_by_height; numpy masks over xs/ys/zs), run by `program.py` in a separate
   `python -I` process (`sandbox_runner.py`): restricted builtins, imports limited to math/numpy/random/itertools/
   functools/colorsys, source checked for files/processes/dunder names, `program_timeout_s` limit. Each round renders the

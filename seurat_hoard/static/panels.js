@@ -412,6 +412,11 @@ function renderJob(d) {
         el('div', {}, 'Se guardó lo que había hasta ese momento.')));
     }
   }
+  if (d.brief) {
+    const det = el('details', { class: 'job-brief' }, el('summary', { text: 'Brief de diseño del modelo' }));
+    det.append(el('pre', { text: d.brief }));
+    parts.push(det);
+  }
   const log = el('div', { class: 'job-log' }, ...(d.log || []).map((l) =>
     el('div', {}, el('time', { text: new Date(l.t * 1000).toLocaleTimeString('es-ES') }), l.text)));
   parts.push(log);

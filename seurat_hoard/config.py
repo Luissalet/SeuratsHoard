@@ -25,7 +25,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "thinking_tokens": 200000,  # thinking per round before the answer is asked for (effort above off)
     "timeout_s": 7200,       # per model call
     "auto_paint": True,      # after the model shapes the volume, paint the reference pictures onto it
-    "method": "code",        # code: the model writes a program that builds the voxels; ops: JSON operations
+    "method": "agent",       # agent: the model runs, looks and fixes its program in a loop; code: fixed rounds; ops: JSON operations
+    "agent_steps": 16,       # actions per agent generation (run, look, done)
+    "agent_minutes": 90,     # time budget per agent generation
+    "agent_step_thinking": 30000,  # thinking per agent action (the server caps a call at 32768 with the answer)
     "code_size": 64,         # grid side for code generations (without a size of their own)
     "program_timeout_s": 60, # time limit for one voxel program
     "paint_sides": False,    # also paint the side picture on both sides (side sprites rarely match the sculpted side)
@@ -131,8 +134,11 @@ def normalize(data: dict[str, Any]) -> dict[str, Any]:
     data["auto_paint"] = bool(data["auto_paint"])
     data["parallel_jobs"] = _clamp(data["parallel_jobs"], 1, 6)
     data["paint_sides"] = bool(data["paint_sides"])
-    if data["method"] not in ("code", "ops"):
-        raise ValueError("method must be code or ops")
+    if data["method"] not in ("agent", "code", "ops"):
+        raise ValueError("method must be agent, code or ops")
+    data["agent_steps"] = _clamp(data["agent_steps"], 2, 60)
+    data["agent_minutes"] = _clamp(data["agent_minutes"], 5, 600)
+    data["agent_step_thinking"] = _clamp(data["agent_step_thinking"], 0, 200000)
     data["code_size"] = _clamp(data["code_size"], 8, 128)
     data["program_timeout_s"] = _clamp(data["program_timeout_s"], 5, 600)
     data["llm_url"] = str(data.get("llm_url") or "").strip()

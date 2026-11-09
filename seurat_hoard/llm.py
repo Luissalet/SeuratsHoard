@@ -107,18 +107,18 @@ class ModelClient:
     # ------------------------------------------------------------------ the call
     def chat(self, system: str, user: str, images: list[bytes], *, max_tokens: int, effort: Optional[str], timeout: float,
              on_progress: Optional[Callable[[int, int], None]] = None, cancel: Optional[threading.Event] = None,
-             thinking_tokens: int = 0, json_mode: bool = True) -> Answer:
-        """One streamed answer. ``max_tokens`` is the room for the answer itself; with reasoning on, ``thinking_tokens``
+             thinking_tokens: int = 0, json_mode: bool = True, history: Optional[list[dict[str, Any]]] = None) -> Answer:
+        """One streamed answer (``history``: earlier user/assistant messages of a conversation, before ``user``). ``max_tokens`` is the room for the answer itself; with reasoning on, ``thinking_tokens``
         (or the level's own budget) is added on top so thinking never eats the answer."""
         url, model, api = self.endpoint()
         level = _reasoning.normalize(effort)
         thinking = level not in (None, "off")
         if api != "openai":
-            return self._via_link(system, user, images, max_tokens + (thinking_tokens if thinking else 0), effort, timeout)
+            return self._via_link(system, user, images, max_tokens + (thinking_tokens if thinking else 0), effort, timeout, history)
         content: list[dict[str, Any]] = [{"type": "text", "text": user}]
         for img in images:
             content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(img).decode()}})
-        body: dict[str, Any] = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
+        body: dict[str, Any] = {"messages": [{"role": "system", "content": system}, *(history or []), {"role": "user", "content": content}],
                                 "max_tokens": max_tokens, "temperature": 0.6 if thinking else 0.3, "stream": True}
         if model:
             body["model"] = model
@@ -212,8 +212,8 @@ class ModelClient:
         follow["chat_template_kwargs"] = {"enable_thinking": False}
         return follow
 
-    def _via_link(self, system, user, images, max_tokens, effort, timeout) -> Answer:
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    def _via_link(self, system, user, images, max_tokens, effort, timeout, history=None) -> Answer:
+        messages = [{"role": "system", "content": system}, *(history or []), {"role": "user", "content": user}]
         t0 = time.time()
         try:
             res = self._get_link().sync.chat(messages, images=images or None, max_tokens=max_tokens, capability="vision",

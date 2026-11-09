@@ -8,7 +8,10 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
 - **Pictures to voxels**
   - *Instant* (no model): *inflate* (the front puffed up like a cushion), *extrude* (a slab) or *silhouette* (front +
     side views carved into a block, coloured from each view).
-  - *With the language model, as a program* (default): DeepSeek V4.1 Flash first writes a design brief from what it
+  - *As an agent* (default): after the design brief, DeepSeek works in a loop like an agent harness: it runs its voxel
+    program, gets the result or the error with the failing line, looks at the model from any side, fixes and refines,
+    and says when it is finished (step and time budgets in Settings). Every run that works is saved.
+  - *With the language model, as a program in fixed rounds*: DeepSeek V4.1 Flash first writes a design brief from what it
     knows about the subject and your description (parts, proportions, positions in 3D, palette; pictures are only
     hints, never traced), then a Python program that builds the
     voxels (blended ellipsoids, tapered capsules, loops of feathers, polygons, symmetry, numpy masks), Seurat runs it in a

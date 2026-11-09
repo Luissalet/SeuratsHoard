@@ -132,7 +132,8 @@
           <label class="field">
             <span>Método</span>
             <select id="gen-method">
-              <option value="code">Programa (el modelo escribe código)</option>
+              <option value="agent">Agente (programa, prueba y corrige solo)</option>
+              <option value="code">Programa por rondas</option>
               <option value="ops">Operaciones (piezas sueltas)</option>
             </select>
           </label>
@@ -230,7 +231,9 @@
           <label class="srow"><span>Tokens para razonar <small>(se suman a la respuesta)</small></span><input type="number" name="thinking_tokens" min="0" max="900000" step="1000"></label>
           <label class="srow"><span>Tiempo límite por llamada (s)</span><input type="number" name="timeout_s" min="30" max="7200" step="10"></label>
           <label class="srow"><span>Método por defecto</span>
-            <select name="method"><option value="code">Programa</option><option value="ops">Operaciones</option></select></label>
+            <select name="method"><option value="agent">Agente</option><option value="code">Programa por rondas</option><option value="ops">Operaciones</option></select></label>
+          <label class="srow"><span>Agente: acciones máximas</span><input type="number" name="agent_steps" min="2" max="60" step="1"></label>
+          <label class="srow"><span>Agente: minutos máximos</span><input type="number" name="agent_minutes" min="5" max="600" step="5"></label>
           <label class="srow"><span>Tamaño de cuadrícula del programa</span><input type="number" name="code_size" min="8" max="128" step="1"></label>
           <label class="srow"><span>Tiempo máximo del programa (s)</span><input type="number" name="program_timeout_s" min="5" max="600" step="5"></label>
           <label class="srow"><span>Pintar las referencias sobre la forma</span><input type="checkbox" name="auto_paint"></label>

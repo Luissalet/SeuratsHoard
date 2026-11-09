@@ -156,7 +156,9 @@ class GenerateArgs(BaseModel):
     effort: Optional[Literal["off", "low", "medium", "high", "max"]] = None
     use_model: bool = Field(True, description="false = only the starting model (no language model).")
     auto_paint: Optional[bool] = Field(None, description="Paint the reference pictures onto the sculpted shape after every round; default from settings.")
-    method: Optional[Literal["code", "ops"]] = Field(None, description="code (default): the model writes a Python program that builds the voxels; ops: JSON operations.")
+    method: Optional[Literal["agent", "code", "ops"]] = Field(None, description="agent (default): the model runs, looks at and fixes its voxel program in a loop until it is done; code: fixed review rounds of programs; ops: JSON operations.")
+    steps: Optional[int] = Field(None, ge=2, le=60, description="agent: actions allowed (run, look, done); default from settings.")
+    minutes: Optional[int] = Field(None, ge=5, le=600, description="agent: time budget; default from settings.")
 
 
 class JobId(BaseModel):
@@ -173,7 +175,10 @@ class SettingsArgs(BaseModel):
     timeout_s: Optional[int] = Field(None, ge=30, le=7200)
     auto_paint: Optional[bool] = None
     paint_sides: Optional[bool] = Field(None, description="Also paint the side picture on both sides.")
-    method: Optional[Literal["code", "ops"]] = None
+    method: Optional[Literal["agent", "code", "ops"]] = None
+    agent_steps: Optional[int] = Field(None, ge=2, le=60)
+    agent_minutes: Optional[int] = Field(None, ge=5, le=600)
+    agent_step_thinking: Optional[int] = Field(None, ge=0, le=200000)
     code_size: Optional[int] = Field(None, ge=8, le=128)
     program_timeout_s: Optional[int] = Field(None, ge=5, le=600)
     parallel_jobs: Optional[int] = Field(None, ge=1, le=6, description="Generations at the same time (after a restart).")

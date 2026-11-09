@@ -9,7 +9,10 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
 - **De imagen a voxels**
   - *Rápido* (sin modelo): *inflar* (el frente abombado como un cojín), *extruir* (una losa) o *silueta* (vistas de
     frente y lado talladas en un bloque, coloreadas desde cada vista).
-  - *Con el modelo de lenguaje, como programa* (por defecto): DeepSeek V4.1 Flash escribe primero un brief de diseño con
+  - *Como agente* (por defecto): tras el brief de diseño, DeepSeek trabaja en bucle como un harness agéntico: ejecuta su
+    programa voxel, recibe el resultado o el error con la línea que falla, mira el modelo desde cualquier lado, corrige y
+    refina, y dice cuándo ha terminado (acciones y minutos máximos en Ajustes). Cada ejecución que funciona se guarda.
+  - *Con el modelo de lenguaje, como programa por rondas fijas*: DeepSeek V4.1 Flash escribe primero un brief de diseño con
     lo que sabe del tema y tu descripción (partes, proporciones, posición en 3D, paleta; las imágenes son solo pistas,
     nunca se calcan) y después un programa en Python que
     construye los voxels (elipsoides fundidos, cápsulas que se estrechan, bucles de plumas, polígonos, simetría, máscaras

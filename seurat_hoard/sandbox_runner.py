@@ -38,22 +38,50 @@ def helpers(shape):
     xs, ys, zs = np.indices(shape, dtype=np.float32)
     gx, gz = np.indices((X, Z), dtype=np.float32)          # 2D ground coordinates (X, Z) for height maps
 
+    def _region(lo, hi):
+        """Slices of the grid between lo and hi (clipped) and open-grid coordinates for that box, so a part only touches
+        the voxels near it instead of the whole grid (keeps big grids fast)."""
+        sl, co = [], []
+        for axis, (a, b, n) in enumerate(zip(lo, hi, (X, Y, Z))):
+            i0 = max(0, int(math.floor(min(a, b))))
+            i1 = min(n, int(math.ceil(max(a, b))) + 1)
+            if i1 <= i0:
+                return None
+            sl.append(slice(i0, i1))
+            shp = [1, 1, 1]; shp[axis] = i1 - i0
+            co.append(np.arange(i0, i1, dtype=np.float32).reshape(shp))
+        return tuple(sl), co
+
+    def _set_in(g, reg, mask, c):
+        if reg is None:
+            return 0
+        view = g[reg[0]]
+        mask = np.broadcast_to(mask, view.shape)
+        view[mask] = c
+        return int(mask.sum())
+
     def column_fill(g, c, height, base=None):
         """Fill each ground column (x, z) from base (default 0) up to height[x, z] (2D arrays of shape (X, Z), or
         numbers): terrain, hills, plateaus, water levels."""
         h = np.broadcast_to(np.asarray(height, np.float32), (X, Z))[:, None, :]
         b = np.broadcast_to(np.asarray(0 if base is None else base, np.float32), (X, Z))[:, None, :]
-        return _set(g, (ys >= b) & (ys <= h), c)
+        yy = np.arange(Y, dtype=np.float32)[None, :, None]
+        return _set(g, (yy >= b) & (yy <= h), c)
 
     def _set(g, mask, c):
+        mask = np.broadcast_to(mask, g.shape)
         g[mask] = c
         return int(mask.sum())
 
     def ellipsoid(g, c, center, radii):
         """Fill an ellipsoid (centre [x,y,z], radii [rx,ry,rz]) with colour index c (0 erases)."""
-        cx, cy, cz = center
+        cx, cy, cz = (float(v) for v in center)
         rx, ry, rz = (max(0.5, float(r)) for r in radii)
-        return _set(g, ((xs - cx) / rx) ** 2 + ((ys - cy) / ry) ** 2 + ((zs - cz) / rz) ** 2 <= 1.0, c)
+        reg = _region((cx - rx, cy - ry, cz - rz), (cx + rx, cy + ry, cz + rz))
+        if reg is None:
+            return 0
+        x, y, z = reg[1]
+        return _set_in(g, reg, ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 + ((z - cz) / rz) ** 2 <= 1.0, c)
 
     def sphere(g, c, center, r):
         return ellipsoid(g, c, center, (r, r, r))
@@ -62,39 +90,55 @@ def helpers(shape):
         """A tube from point a to point b whose radius goes from r0 to r1 (necks, tails, limbs, feathers, horns)."""
         r1 = r0 if r1 is None else r1
         a = np.asarray(a, np.float32); b = np.asarray(b, np.float32)
+        pad = max(float(r0), float(r1)) + 1.0
+        reg = _region(np.minimum(a, b) - pad, np.maximum(a, b) + pad)
+        if reg is None:
+            return 0
+        x, y, z = reg[1]
         ab = b - a
         L2 = float(ab @ ab) or 1.0
-        t = np.clip(((xs - a[0]) * ab[0] + (ys - a[1]) * ab[1] + (zs - a[2]) * ab[2]) / L2, 0.0, 1.0)
-        px, py, pz = a[0] + t * ab[0], a[1] + t * ab[1], a[2] + t * ab[2]
-        d2 = (xs - px) ** 2 + (ys - py) ** 2 + (zs - pz) ** 2
+        t = np.clip(((x - a[0]) * ab[0] + (y - a[1]) * ab[1] + (z - a[2]) * ab[2]) / L2, 0.0, 1.0)
+        d2 = (x - (a[0] + t * ab[0])) ** 2 + (y - (a[1] + t * ab[1])) ** 2 + (z - (a[2] + t * ab[2])) ** 2
         r = r0 + (r1 - r0) * t
-        return _set(g, d2 <= (r + 0.35) ** 2, c)
+        return _set_in(g, reg, d2 <= (r + 0.35) ** 2, c)
 
     def box(g, c, lo, hi):
         """Fill the box between corners lo and hi (inclusive)."""
-        (x0, y0, z0), (x1, y1, z1) = lo, hi
-        m = (xs >= min(x0, x1)) & (xs <= max(x0, x1)) & (ys >= min(y0, y1)) & (ys <= max(y0, y1)) \
-            & (zs >= min(z0, z1)) & (zs <= max(z0, z1))
-        return _set(g, m, c)
+        reg = _region([float(v) for v in lo], [float(v) for v in hi])
+        if reg is None:
+            return 0
+        lo_i = [min(a, b) for a, b in zip(lo, hi)]; hi_i = [max(a, b) for a, b in zip(lo, hi)]
+        x, y, z = reg[1]
+        m = (x >= lo_i[0]) & (x <= hi_i[0]) & (y >= lo_i[1]) & (y <= hi_i[1]) & (z >= lo_i[2]) & (z <= hi_i[2])
+        return _set_in(g, reg, m, c)
 
     def polygon(g, c, points, plane="top", lo=0, hi=0):
         """A flat polygon with thickness: points [[u,v],...] on plane top (u=x, v=z, thickness along y from lo to hi),
         front (u=x, v=y, along z) or side (u=z, v=y, along x). Wings, fins, ears, blades, tail fans."""
         pts = [(float(u), float(v)) for u, v in points]
-        if plane == "top":
-            U, V, W = xs, zs, ys
-        elif plane == "front":
-            U, V, W = xs, ys, zs
-        else:
-            U, V, W = zs, ys, xs
-        inside = np.zeros(shape, bool)
+        if not pts:
+            return 0
+        us = [p[0] for p in pts]; vs = [p[1] for p in pts]
+        w0, w1 = float(min(lo, hi)), float(max(lo, hi))
+        if plane == "top":        # u=x, v=z, w=y
+            reg = _region((min(us), w0, min(vs)), (max(us), w1, max(vs)))
+            pick = lambda x, y, z: (x, z, y)
+        elif plane == "front":    # u=x, v=y, w=z
+            reg = _region((min(us), min(vs), w0), (max(us), max(vs), w1))
+            pick = lambda x, y, z: (x, y, z)
+        else:                     # side: u=z, v=y, w=x
+            reg = _region((w0, min(vs), min(us)), (w1, max(vs), max(us)))
+            pick = lambda x, y, z: (z, y, x)
+        if reg is None:
+            return 0
+        U, V, W = pick(*reg[1])
+        inside = np.zeros(np.broadcast_shapes(U.shape, V.shape), bool)
         j = len(pts) - 1
         for i in range(len(pts)):
             (ui, vi), (uj, vj) = pts[i], pts[j]
-            cond = ((vi > V) != (vj > V)) & (U < (uj - ui) * (V - vi) / ((vj - vi) or 1e-9) + ui)
-            inside ^= cond
+            inside ^= ((vi > V) != (vj > V)) & (U < (uj - ui) * (V - vi) / ((vj - vi) or 1e-9) + ui)
             j = i
-        return _set(g, inside & (W >= min(lo, hi)) & (W <= max(lo, hi)), c)
+        return _set_in(g, reg, inside & (W >= w0) & (W <= w1), c)
 
     def mirror_x(g):
         """Copy the left half (low x) onto the right half: symmetric creatures."""
@@ -104,7 +148,8 @@ def helpers(shape):
 
     def shade_by_height(g, c, c_dark, below_y):
         """Recolour colour c to c_dark below height below_y (undersides)."""
-        return _set(g, (g == c) & (ys < below_y), c_dark)
+        yy = np.arange(Y, dtype=np.float32)[None, :, None]
+        return _set(g, (g == c) & (yy < below_y), c_dark)
 
     return {"X": X, "Y": Y, "Z": Z, "xs": xs, "ys": ys, "zs": zs, "gx": gx, "gz": gz, "column_fill": column_fill,
             "ellipsoid": ellipsoid, "sphere": sphere,

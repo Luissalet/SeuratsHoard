@@ -164,6 +164,7 @@ class SettingsArgs(BaseModel):
     thinking_tokens: Optional[int] = Field(None, ge=0, le=900000)
     timeout_s: Optional[int] = Field(None, ge=30, le=7200)
     auto_paint: Optional[bool] = None
+    paint_sides: Optional[bool] = Field(None, description="Also paint the side picture on both sides.")
     parallel_jobs: Optional[int] = Field(None, ge=1, le=6, description="Generations at the same time (after a restart).")
     llm_url: Optional[str] = Field(None, max_length=300)
     llm_model: Optional[str] = Field(None, max_length=120)

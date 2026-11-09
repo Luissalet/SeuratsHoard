@@ -12,7 +12,7 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
   - *Con el modelo de lenguaje* (DeepSeek V4.1 Flash en las Sparks por defecto, a través de Hoard Link): ve las
     imágenes de referencia y sus cuadrículas de píxeles, razona a fondo (esfuerzo `max` por defecto, varios minutos por
     ronda) y esculpe la forma por partes (elipsoides, cápsulas que se estrechan para cuellos y colas, prismas de polígono
-    para alas y aletas). Seurat pinta las imágenes sobre esa forma (frente, espalda y ambos lados) y el modelo revisa una
+    para alas y aletas). Seurat pinta las imágenes sobre esa forma (frente y espalda; también la lateral si lo activas) y el modelo revisa una
     hoja con seis vistas de su propio resultado (diferencias de silueta frontal y errores de sus operaciones) durante las
     rondas que elijas. Una ronda que vaciaría o destrozaría el modelo se deshace. Cada ronda se ve con su render,
     sus notas y sus errores; las respuestas se guardan como texto junto a los renders. Papel de cada imagen: frente,

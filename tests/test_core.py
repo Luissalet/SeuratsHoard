@@ -272,11 +272,18 @@ def test_destructive_guard_and_auto_paint():
     m = VoxelModel.empty("t", "t", [4, 4, 6], ["#ffffff", "#ff0000", "#0000ff"])
     apply_ops(m, [{"op": "box", "from": [0, 0, 1], "to": [3, 3, 4], "c": 1}])
     refs = {"front": [({}, Ix([[1] * 4] * 4, ["#ff0000"]), b"")], "side": [({}, Ix([[0, 0, 1, 1, 1, 1]] * 4, ["#0000ff"]), b"")]}
-    changed = Generator._auto_paint(Generator.__new__(Generator), m, refs)
+    gen = Generator.__new__(Generator)
+    gen.svc = type("Svc", (), {"settings": {"paint_sides": True}})()
+    changed = gen._auto_paint(m, refs)
     assert changed > 0
     assert m.grid[1, 1, 4] == 2           # front surface red
     assert m.grid[0, 1, 2] == 3           # left side blue (z=2 is column 2)
     assert m.grid[1, 1, 2] == 1           # inside untouched
+    gen.svc.settings["paint_sides"] = False
+    m2 = VoxelModel.empty("t", "t", [4, 4, 6], ["#ffffff", "#ff0000", "#0000ff"])
+    apply_ops(m2, [{"op": "box", "from": [0, 0, 1], "to": [3, 3, 4], "c": 1}])
+    gen._auto_paint(m2, refs)
+    assert m2.grid[0, 1, 2] == 1 and m2.grid[1, 1, 4] == 2     # sides keep the part colour by default
 
 
 def test_thinking_budget_then_answer_from_the_reasoning(monkeypatch):
@@ -321,3 +328,44 @@ def test_thinking_budget_then_answer_from_the_reasoning(monkeypatch):
     follow = calls[1]
     assert follow["chat_template_kwargs"] == {"enable_thinking": False} and "plan step 0." in follow["messages"][-2]["content"]
     assert follow["max_tokens"] == 1000 and calls[0]["max_tokens"] == 1000 + 20 + 2000
+
+
+def test_thinking_cut_by_the_server_is_continued(monkeypatch):
+    import contextlib, json as _json
+    import httpx
+    from seurat_hoard import llm as L
+
+    calls = []
+
+    class Resp:
+        status_code = 200
+
+        def __init__(self, lines):
+            self._lines = lines
+
+        def iter_lines(self):
+            yield from self._lines
+
+        def read(self):
+            return b""
+
+    @contextlib.contextmanager
+    def fake_stream(method, url, json=None, timeout=None):
+        calls.append(json)
+        n = len(calls)
+        lines = ["data: " + _json.dumps({"choices": [{"delta": {"reasoning_content": f"part {n} thought. "}}],
+                                          "usage": {"completion_tokens": 32768, "reasoning_tokens": 32768}})]
+        if n == 1:                                   # the server's cap: thinking stops, no answer
+            lines.append("data: " + _json.dumps({"choices": [{"delta": {}, "finish_reason": "length"}]}))
+        else:
+            lines.append("data: " + _json.dumps({"choices": [{"delta": {"content": '{"ops": [1]}'}, "finish_reason": "stop"}],
+                                                  "usage": {"completion_tokens": 32780, "reasoning_tokens": 32768}}))
+        lines.append("data: [DONE]")
+        yield Resp(lines)
+
+    monkeypatch.setattr(httpx, "stream", fake_stream)
+    client = L.ModelClient({"llm_url": "http://x/v1", "llm_model": "m"})
+    ans = client.chat("sys", "user", [], max_tokens=1000, effort="max", timeout=60, thinking_tokens=200000)
+    assert ans.text == '{"ops": [1]}' and ans.thinking_calls == 2 and not ans.followed_up
+    assert ans.reasoning_tokens == 65536 and "part 1 thought" in calls[1]["messages"][-2]["content"]
+    assert calls[1]["chat_template_kwargs"].get("enable_thinking") is True

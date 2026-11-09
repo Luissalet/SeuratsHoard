@@ -223,6 +223,7 @@
           <label class="srow"><span>Tokens para razonar <small>(se suman a la respuesta)</small></span><input type="number" name="thinking_tokens" min="0" max="900000" step="1000"></label>
           <label class="srow"><span>Tiempo límite por llamada (s)</span><input type="number" name="timeout_s" min="30" max="7200" step="10"></label>
           <label class="srow"><span>Pintar las referencias sobre la forma</span><input type="checkbox" name="auto_paint"></label>
+          <label class="srow"><span>Pintar también la imagen lateral en los lados</span><input type="checkbox" name="paint_sides"></label>
           <label class="srow"><span>Generaciones a la vez <small>(al reiniciar)</small></span><input type="number" name="parallel_jobs" min="1" max="6" step="1"></label>
           <label class="srow col"><span>URL del modelo <small>(vacía: el de la familia, en las Sparks)</small></span><input type="text" name="llm_url" maxlength="300" placeholder="http://servidor:puerto/v1"></label>
           <label class="srow col"><span>Nombre del modelo <small>(vacío: el que tenga el servidor)</small></span><input type="text" name="llm_model" maxlength="120"></label>

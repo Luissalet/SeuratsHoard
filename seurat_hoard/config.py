@@ -25,6 +25,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "thinking_tokens": 200000,  # thinking per round before the answer is asked for (effort above off)
     "timeout_s": 7200,       # per model call
     "auto_paint": True,      # after the model shapes the volume, paint the reference pictures onto it
+    "paint_sides": False,    # also paint the side picture on both sides (side sprites rarely match the sculpted side)
     "parallel_jobs": 1,      # generations running at the same time (read at start); one at a time thinks faster
     "llm_url": "",           # empty: the family's model (DeepSeek on the Sparks through Hoard Link); else an OpenAI-compatible URL
     "llm_model": "",
@@ -126,6 +127,7 @@ def normalize(data: dict[str, Any]) -> dict[str, Any]:
     data["thinking_tokens"] = _clamp(data["thinking_tokens"], 0, 900000)
     data["auto_paint"] = bool(data["auto_paint"])
     data["parallel_jobs"] = _clamp(data["parallel_jobs"], 1, 6)
+    data["paint_sides"] = bool(data["paint_sides"])
     data["llm_url"] = str(data.get("llm_url") or "").strip()
     data["llm_model"] = str(data.get("llm_model") or "").strip()
     data["voxel_mm"] = _clamp(data["voxel_mm"], 0.1, 50.0, float)

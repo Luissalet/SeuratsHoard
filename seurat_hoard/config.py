@@ -25,6 +25,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "thinking_tokens": 200000,  # thinking per round before the answer is asked for (effort above off)
     "timeout_s": 7200,       # per model call
     "auto_paint": True,      # after the model shapes the volume, paint the reference pictures onto it
+    "method": "code",        # code: the model writes a program that builds the voxels; ops: JSON operations
+    "code_size": 64,         # grid side for code generations (without a size of their own)
+    "program_timeout_s": 60, # time limit for one voxel program
     "paint_sides": False,    # also paint the side picture on both sides (side sprites rarely match the sculpted side)
     "parallel_jobs": 1,      # generations running at the same time (read at start); one at a time thinks faster
     "llm_url": "",           # empty: the family's model (DeepSeek on the Sparks through Hoard Link); else an OpenAI-compatible URL
@@ -128,6 +131,10 @@ def normalize(data: dict[str, Any]) -> dict[str, Any]:
     data["auto_paint"] = bool(data["auto_paint"])
     data["parallel_jobs"] = _clamp(data["parallel_jobs"], 1, 6)
     data["paint_sides"] = bool(data["paint_sides"])
+    if data["method"] not in ("code", "ops"):
+        raise ValueError("method must be code or ops")
+    data["code_size"] = _clamp(data["code_size"], 8, 128)
+    data["program_timeout_s"] = _clamp(data["program_timeout_s"], 5, 600)
     data["llm_url"] = str(data.get("llm_url") or "").strip()
     data["llm_model"] = str(data.get("llm_model") or "").strip()
     data["voxel_mm"] = _clamp(data["voxel_mm"], 0.1, 50.0, float)

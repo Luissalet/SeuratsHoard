@@ -269,7 +269,8 @@ function genParams() {
     max_side: parseInt($('gen-size').value, 10),
     colors: parseInt($('gen-colors').value, 10),
     effort: $('gen-effort').value,
-    ...(used.length ? {} : { size: Array(3).fill(parseInt($('gen-size').value, 10)) }),
+    method: $('gen-method').value,
+    ...(used.length && $('gen-method').value !== 'code' ? {} : { size: Array(3).fill(parseInt($('gen-size').value, 10)) }),
   };
 }
 
@@ -528,6 +529,7 @@ function initSettings() {
     const body = {
       max_side: +f.max_side.value, colors: +f.colors.value, review_rounds: +f.review_rounds.value, effort: f.effort.value,
       max_tokens: +f.max_tokens.value, thinking_tokens: +f.thinking_tokens.value, timeout_s: +f.timeout_s.value,
+      method: f.method.value, code_size: +f.code_size.value, program_timeout_s: +f.program_timeout_s.value,
       auto_paint: f.auto_paint.checked, paint_sides: f.paint_sides.checked, parallel_jobs: +f.parallel_jobs.value, llm_url: f.llm_url.value.trim(), llm_model: f.llm_model.value.trim(),
       voxel_mm: +f.voxel_mm.value, glb_voxel_size: +f.glb_voxel_size.value,
       new_size: [+f.new_size_x.value, +f.new_size_y.value, +f.new_size_z.value],
@@ -550,7 +552,7 @@ function fillSettings(s, defaults) {
   if (!s) return;
   if (!settingsDirty) {
     const f = $('settings-form').elements;
-    for (const k of ['max_side', 'colors', 'review_rounds', 'effort', 'max_tokens', 'thinking_tokens', 'parallel_jobs', 'timeout_s', 'llm_url', 'llm_model', 'voxel_mm', 'glb_voxel_size']) {
+    for (const k of ['max_side', 'colors', 'review_rounds', 'effort', 'max_tokens', 'thinking_tokens', 'parallel_jobs', 'method', 'code_size', 'program_timeout_s', 'timeout_s', 'llm_url', 'llm_model', 'voxel_mm', 'glb_voxel_size']) {
       if (f[k] && s[k] !== undefined) f[k].value = s[k];
     }
     if (f.auto_paint) f.auto_paint.checked = s.auto_paint !== false;
@@ -563,6 +565,8 @@ function fillSettings(s, defaults) {
     $('gen-colors').value = s.colors;
     $('gen-rounds').value = s.review_rounds;
     $('gen-effort').value = s.effort;
+    if (s.method) $('gen-method').value = s.method;
+    if (s.method === 'code' && s.code_size) $('gen-size').value = Math.max(8, Math.min(128, s.code_size));
     syncOutputs();
   }
 }

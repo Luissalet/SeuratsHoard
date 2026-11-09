@@ -8,7 +8,12 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
 - **Pictures to voxels**
   - *Instant* (no model): *inflate* (the front puffed up like a cushion), *extrude* (a slab) or *silhouette* (front +
     side views carved into a block, coloured from each view).
-  - *With the language model* (DeepSeek V4.1 Flash on the Sparks by default, through the family's Hoard Link): it sees
+  - *With the language model, as a program* (default): DeepSeek V4.1 Flash writes a Python program that builds the
+    voxels (blended ellipsoids, tapered capsules, loops of feathers, polygons, symmetry, numpy masks), Seurat runs it in a
+    separate process with a time limit and no files or network, shows the result and asks for a better program round
+    after round. The last working program is kept with the model. Grids up to 128 per side; scenes from a description
+    alone or creatures from pictures (official artwork works far better than small game sprites).
+  - *With the language model, as operations* (`method: ops`): it sees
     the reference pictures and their pixel grids, thinks at length (effort `max` by default, several minutes per round)
     and sculpts the shape from parts (ellipsoids, tapered capsules for necks and tails, polygon prisms for wings and
     fins). Seurat paints the pictures onto that shape (front and back; the side picture too if you switch it on), and the model reviews a contact sheet of

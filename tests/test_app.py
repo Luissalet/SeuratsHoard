@@ -49,6 +49,7 @@ def app_client(tmp_path):
     cfg = Config(data_dir=tmp_path / "data", port=5250, data_dir_configured=True, background=False)
     link = FakeLink()
     svc = Services(cfg, link_factory=lambda: link)
+    svc.settings.update({"method": "ops"})          # these tests answer with operations; code mode has its own test
     app = create_app(cfg, services=svc)
     with TestClient(app, base_url="http://127.0.0.1:5250", client=("127.0.0.1", 50000)) as c:
         yield c, svc, link
@@ -205,3 +206,61 @@ def test_cancel_before_anything_is_built_saves_nothing(app_client):
     job = c.post("/api/generate", json={"prompt": "a tree", "rounds": 0, "size": [16, 16, 16]}).json()
     st = c.get(f"/api/jobs/{job['job_id']}").json()
     assert not st["model_id"] and len(c.get("/api/models").json()["models"]) == before
+
+
+class CodeLink(FakeLink):
+    """Answers voxel programs: a failing one, then a working one, then done."""
+
+    def chat(self, messages, images=None, **kw):
+        self.calls.append({"messages": messages, "images": images or [], **kw})
+        n = len(self.calls)
+        if n == 1:
+            code = "PALETTE = ['#ff0000']\ndef build(g):\n    import os\n"
+        elif n == 2:
+            code = ("PALETTE = ['#f0f0f0', '#2040a0']\n"
+                    "def build(g):\n"
+                    "    ellipsoid(g, 1, (X/2, Y/2, Z/2), (X/3, Y/4, Z/3))\n"
+                    "    capsule(g, 2, (X/2, Y/2, Z/2), (X/2, Y-3, Z-3), 2, 1)\n"
+                    "    for i in range(4):\n"
+                    "        capsule(g, 2, (4, Y/2, Z/2), (2 + i, Y/2 + 3 + i, 4), 1.2)\n"
+                    "    mirror_x(g)\n")
+        else:
+            return SimpleNamespace(text=json.dumps({"done": True, "notes": "good", "code": ""}), model="deepseek-v4.1-flash")
+        return SimpleNamespace(text=json.dumps({"notes": f"try {n}", "code": code}), model="deepseek-v4.1-flash")
+
+
+def test_code_generation_runs_the_program_and_keeps_it(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from seurat_hoard.config import Config
+    from seurat_hoard.main import create_app
+    from seurat_hoard.services import Services
+
+    cfg = Config(data_dir=tmp_path / "data", port=5250, data_dir_configured=True, background=False)
+    link = CodeLink()
+    svc = Services(cfg, link_factory=lambda: link)
+    with TestClient(create_app(cfg, services=svc), base_url="http://127.0.0.1:5250", client=("127.0.0.1", 50000)) as c:
+        job = c.post("/api/generate", json={"prompt": "a small bird", "rounds": 2, "size": [24, 24, 24]}).json()
+        st = c.get(f"/api/jobs/{job['job_id']}").json()
+        assert st["status"] == "done", st
+        assert st["rounds"][1]["errors"] and "not allowed" in st["rounds"][1]["errors"][0]
+        model = c.get(f"/api/models/{st['model_id']}").json()
+        assert model["count"] > 100 and model["palette"][:2] == ["#f0f0f0", "#2040a0"] and model["size"] == [24, 24, 24]
+        assert "mirror_x(g)" in model["source"]["program"] and model["source"]["method"] == "code"
+        second = link.calls[1]["messages"][1]["content"]
+        assert "FAILED" in second and "import os" in second
+
+
+def test_program_sandbox_limits():
+    from seurat_hoard.program import ProgramError, run_program
+    import pytest as _pytest
+    for bad in ("PALETTE=['#fff']\ndef build(g):\n    open('x','w')\n",
+                "PALETTE=['#fff']\ndef build(g):\n    __import__('os')\n",
+                "PALETTE=['#fff']\nimport random\ndef build(g):\n    import json\n    g[0,0,0]=1\n"):
+        with _pytest.raises(ProgramError):
+            run_program(bad, [4, 4, 4])
+    with _pytest.raises(ProgramError) as e:
+        run_program("PALETTE=['#fff']\ndef build(g):\n    while True:\n        pass\n", [4, 4, 4], timeout=2)
+    assert "longer than" in e.value.message
+    res = run_program("PALETTE=['#fff','#000']\ndef build(g):\n    box(g, 2, (0,0,0), (1,1,1))\n    g[3,3,3] = 9\n", [4, 4, 4])
+    assert res.count == 8 and res.grid[3, 3, 3] == 0      # index 9 has no colour: dropped

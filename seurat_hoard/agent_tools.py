@@ -149,6 +149,7 @@ class GenerateArgs(BaseModel):
     effort: Optional[Literal["off", "low", "medium", "high", "max"]] = None
     use_model: bool = Field(True, description="false = only the starting model (no language model).")
     auto_paint: Optional[bool] = Field(None, description="Paint the reference pictures onto the sculpted shape after every round; default from settings.")
+    method: Optional[Literal["code", "ops"]] = Field(None, description="code (default): the model writes a Python program that builds the voxels; ops: JSON operations.")
 
 
 class JobId(BaseModel):
@@ -165,6 +166,9 @@ class SettingsArgs(BaseModel):
     timeout_s: Optional[int] = Field(None, ge=30, le=7200)
     auto_paint: Optional[bool] = None
     paint_sides: Optional[bool] = Field(None, description="Also paint the side picture on both sides.")
+    method: Optional[Literal["code", "ops"]] = None
+    code_size: Optional[int] = Field(None, ge=8, le=128)
+    program_timeout_s: Optional[int] = Field(None, ge=5, le=600)
     parallel_jobs: Optional[int] = Field(None, ge=1, le=6, description="Generations at the same time (after a restart).")
     llm_url: Optional[str] = Field(None, max_length=300)
     llm_model: Optional[str] = Field(None, max_length=120)

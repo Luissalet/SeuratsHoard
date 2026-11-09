@@ -155,7 +155,7 @@ class ModelClient:
 
     @staticmethod
     def _follow_up(body: dict[str, Any], reasoning: str, max_tokens: int) -> dict[str, Any]:
-        keep = 120_000                                   # characters of thinking handed back (its start and its end)
+        keep = 700_000                                   # characters of thinking handed back (its start and its end); ~250k tokens
         if len(reasoning) > keep:
             reasoning = reasoning[: keep // 3] + "\n[...]\n" + reasoning[-(keep * 2 // 3):]
         follow = {k: v for k, v in body.items() if k not in ("messages", "max_tokens", "thinking_budget_tokens",

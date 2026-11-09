@@ -841,7 +841,8 @@ class Generator:
                     user_text, user_images = "There is no model yet: run a program first.", []
                     continue
                 img = png_bytes(render(model, view, size=None, background="dark"))
-                user_text, user_images = f"Here is the current model from {view}. Next action?", [img]
+                user_text, user_images = (f"The LAST picture is the current model from {view}"
+                                          + (" (the others are the references again)" if ref_images else "") + ". Next action?"), list(ref_images) + [img]
                 continue
             code = data.get("code") if isinstance(data.get("code"), str) else ""
             if action != "run" or not code.strip():
@@ -873,11 +874,13 @@ class Generator:
                                 "prompt": p.get("prompt") or "", "partial": True}
                 self.svc.store.save(model, version_note=f"generation {job.id} step {step}")
                 job.model_id, job.model_name = model.id, model.name
-            user_text = (f"It ran: {res.count} voxels, {len(res.palette)} colours, bounds {model.bounds()}. The picture is a contact "
-                         "sheet (front, left, top, back, two isometric views). Judge it against the brief: would someone recognise "
-                         "it at once from every side? Next action: run an improved complete program, look closer from a side, or "
-                         "done if it is excellent.")
-            user_images = [png_bytes(sheet(model, 1100))]
+            user_text = (f"It ran: {res.count} voxels, {len(res.palette)} colours, bounds {model.bounds()}. The LAST picture is a contact "
+                         "sheet of the model (front, left, top, back, two isometric views)"
+                         + ("; the pictures before it are the references again" if ref_images else "") + ". Be a harsh critic: compare "
+                         "it with the references and the brief part by part (proportions, silhouette, pose, colours, the features that make "
+                         "it recognisable) and list what is wrong before deciding. Next action: run an improved complete program, look "
+                         "closer from a side, or done only if it is truly excellent.")
+            user_images = list(ref_images) + [png_bytes(sheet(model, 1100))]
         if not last_code and not model.count:
             raise SeuratError("failed", "The model never produced a working program.")
         return llm_name

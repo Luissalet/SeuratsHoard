@@ -1,0 +1,5 @@
+* text=auto eol=lf
+seurat_hoard/hoard_link/** -text
+*.png binary
+*.vox binary
+*.glb binary

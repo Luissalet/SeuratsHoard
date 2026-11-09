@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="es" data-hoard-app="seurat" data-hoard-copilot-position="left">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1c1614">
+  <title>Seurat's Hoard</title>
+  <link rel="icon" href="/icon-192.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/hoard-theme.css">
+  <link rel="stylesheet" href="/app.css">
+  <script type="importmap">{"imports":{"three":"/vendor/three/three.module.min.js"}}</script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img src="/icon-192.png" alt="" class="brand-icon">
+      <span class="brand-name">Seurat's Hoard</span>
+    </div>
+
+    <div class="model-bar">
+      <label class="sr-only" for="model-select">Modelo</label>
+      <select id="model-select" class="model-select" title="Modelo abierto"></select>
+      <button class="btn small" id="btn-new" title="Crear un modelo vacío">Nuevo</button>
+      <button class="btn small" id="btn-dup" title="Hacer una copia del modelo">Duplicar</button>
+      <button class="btn small" id="btn-rename" title="Cambiar el nombre">Renombrar</button>
+      <button class="btn small" id="btn-versions" title="Versiones anteriores">Versiones</button>
+      <button class="btn small" id="btn-import" title="Abrir un archivo de MagicaVoxel">Importar .vox</button>
+      <button class="btn small danger" id="btn-delete" title="Mover a la papelera">Borrar</button>
+      <input type="file" id="file-vox" accept=".vox" hidden>
+    </div>
+
+    <div class="save-state" id="save-state" data-state="saved"><span class="dot"></span><span id="save-text">Guardado</span></div>
+  </header>
+
+  <main class="layout">
+    <nav class="toolbar" id="toolbar" aria-label="Herramientas"></nav>
+
+    <section class="center">
+      <div class="viewport" id="viewport">
+        <div class="vp-tl" id="tool-options"></div>
+        <div class="vp-tr">
+          <div class="seg" role="group" aria-label="Vistas">
+            <button class="seg-btn" data-view="iso" title="Vista isométrica">Iso</button>
+            <button class="seg-btn" data-view="front" title="Desde delante">Frente</button>
+            <button class="seg-btn" data-view="left" title="Desde la izquierda">Lado</button>
+            <button class="seg-btn" data-view="back" title="Desde detrás">Detrás</button>
+            <button class="seg-btn" data-view="top" title="Desde arriba">Arriba</button>
+          </div>
+          <button class="seg-btn solo" data-view="iso" id="btn-reset-cam" title="Volver a encuadrar (Inicio)">Centrar</button>
+        </div>
+        <div class="slicer" id="slicer" title="Ocultar las capas de arriba para editar por dentro">
+          <span class="slicer-label">Capas</span>
+          <span class="slicer-value" id="slicer-value">todas</span>
+          <input type="range" id="slicer-range" min="0" max="32" value="32" aria-label="Capas visibles">
+        </div>
+        <div class="vp-hint" id="empty-hint" hidden>
+          <b>Modelo vacío.</b> Haz clic en el suelo para poner el primer voxel, o sube una imagen en <a href="#" data-goto="refs">Referencias</a>.
+        </div>
+        <div class="vp-help">Botón derecho: girar · Rueda: acercar · Mayús + derecho: desplazar</div>
+      </div>
+
+      <div class="palette-bar">
+        <div class="current-color" id="current-color" title="Color actual (clic para cambiarlo; doble clic en la paleta para editar otro)">
+          <span class="cc-swatch" id="cc-swatch"></span>
+          <span class="cc-meta"><span id="cc-index">1</span><span id="cc-hex">#000000</span></span>
+        </div>
+        <div class="swatches" id="swatches" role="listbox" aria-label="Paleta"></div>
+        <button class="btn small add-color" id="btn-add-color" title="Añadir un color a la paleta">+ Color</button>
+        <input type="color" id="color-input" class="color-input" tabindex="-1" aria-hidden="true">
+      </div>
+    </section>
+
+    <aside class="side">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="refs" role="tab">Referencias</button>
+        <button class="tab" data-tab="gen" role="tab">Generar</button>
+        <button class="tab" data-tab="export" role="tab">Exportar</button>
+        <button class="tab" data-tab="settings" role="tab">Ajustes</button>
+      </div>
+
+      <!-- Referencias -->
+      <section class="pane active" data-pane="refs">
+        <div class="drop" id="drop">
+          <input type="file" id="file-refs" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp" multiple hidden>
+          <b>Suelta aquí tus imágenes</b>
+          <span>PNG o JPG, varias a la vez · <a href="#" id="pick-refs">elegir archivos</a></span>
+        </div>
+        <p class="pane-tip">El papel de cada imagen decide cómo se usa al generar. Haz clic en una para ver cómo la lee el modelo.</p>
+        <div class="empty" id="refs-empty" hidden>Aún no hay referencias.</div>
+        <div class="ref-grid" id="ref-grid"></div>
+      </section>
+
+      <!-- Generar -->
+      <section class="pane" data-pane="gen">
+        <div class="llm-line" id="llm-line" data-state="unknown"><span class="dot"></span><span id="llm-text">Comprobando el modelo…</span></div>
+
+        <div class="block">
+          <div class="block-head">Referencias <button class="link-btn" data-goto="refs">cambiar</button></div>
+          <div class="gen-refs" id="gen-refs"></div>
+        </div>
+
+        <label class="field">
+          <span>Qué quieres</span>
+          <textarea id="gen-prompt" rows="3" maxlength="2000" placeholder="Ej.: un slime verde y redondo, con brillo arriba y la espalda más oscura"></textarea>
+        </label>
+
+        <div class="grid2">
+          <label class="field">
+            <span>Tamaño <output id="gen-size-out">32</output> voxels</span>
+            <input type="range" id="gen-size" min="8" max="96" value="32">
+          </label>
+          <label class="field">
+            <span>Colores <output id="gen-colors-out">16</output></span>
+            <input type="range" id="gen-colors" min="2" max="48" value="16">
+          </label>
+          <label class="field">
+            <span>Empezar desde</span>
+            <select id="gen-start">
+              <option value="auto">Automático</option>
+              <option value="inflate">Inflar</option>
+              <option value="hull">Silueta frente + lado</option>
+              <option value="extrude">Extruir</option>
+              <option value="empty">Vacío</option>
+              <option value="current">Modelo actual (retocar)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Rondas de revisión <output id="gen-rounds-out">2</output></span>
+            <input type="range" id="gen-rounds" min="0" max="6" value="2">
+          </label>
+          <label class="field">
+            <span>Esfuerzo</span>
+            <select id="gen-effort">
+              <option value="off">Sin razonar</option>
+              <option value="low">Bajo</option>
+              <option value="medium">Medio</option>
+              <option value="high">Alto</option>
+              <option value="max">Máximo</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Nombre <small>(opcional)</small></span>
+            <input type="text" id="gen-name" maxlength="120" placeholder="Automático">
+          </label>
+        </div>
+
+        <div class="radio-row" role="radiogroup" aria-label="Dónde guardar">
+          <label><input type="radio" name="gen-dest" value="new" checked> Guardar como modelo nuevo</label>
+          <label><input type="radio" name="gen-dest" value="into"> Nueva versión del modelo abierto</label>
+        </div>
+
+        <button class="btn primary big wide" id="btn-generate">Generar con DeepSeek</button>
+
+        <div class="quick">
+          <span class="quick-label">Rápido, sin modelo:</span>
+          <button class="btn small" data-build="inflate" title="Hincha la imagen de frente">Inflar</button>
+          <button class="btn small" data-build="extrude" title="La imagen con grosor">Extruir</button>
+          <button class="btn small" data-build="hull" title="Cruza la silueta de frente con la de lado">Silueta</button>
+        </div>
+
+        <div class="job" id="job" hidden></div>
+      </section>
+
+      <!-- Exportar -->
+      <section class="pane" data-pane="export">
+        <div class="export-preview" id="export-preview">
+          <img id="export-img" alt="Vistas del modelo">
+          <div class="empty" id="export-empty" hidden>El modelo está vacío: no hay nada que exportar.</div>
+        </div>
+        <div class="export-list">
+          <div class="export-row">
+            <div><b>MagicaVoxel</b><small>.vox, con la paleta</small></div>
+            <button class="btn small" data-export="vox">Descargar .vox</button>
+          </div>
+          <div class="export-row">
+            <div><b>glTF binario</b><small id="glb-info">.glb</small></div>
+            <button class="btn small" data-export="glb">Descargar .glb</button>
+          </div>
+          <div class="export-row">
+            <div><b>Impresión 3D</b><small id="stl-info">.stl</small></div>
+            <button class="btn small" data-export="stl">Descargar .stl</button>
+          </div>
+          <div class="export-row">
+            <div><b>Imagen PNG</b>
+              <select id="png-view" class="inline-select" aria-label="Vista del PNG">
+                <option value="iso">Isométrica (frente-derecha)</option>
+                <option value="iso_front_left">Isométrica (frente-izquierda)</option>
+                <option value="iso_back_left">Isométrica (detrás-izquierda)</option>
+                <option value="iso_back_right">Isométrica (detrás-derecha)</option>
+                <option value="front">Frente</option>
+                <option value="back">Detrás</option>
+                <option value="left">Izquierda</option>
+                <option value="right">Derecha</option>
+                <option value="top">Arriba</option>
+                <option value="bottom">Abajo</option>
+                <option value="sheet">Hoja con todas las vistas</option>
+              </select>
+            </div>
+            <button class="btn small" data-export="png">Descargar PNG</button>
+          </div>
+          <div class="export-row">
+            <div><b>Sprites isométricos</b><small>los cuatro lados en una imagen</small></div>
+            <button class="btn small" data-export="sprites">Descargar sprites</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Ajustes -->
+      <section class="pane" data-pane="settings">
+        <form id="settings-form" class="settings" autocomplete="off">
+          <h3>Lectura de imágenes</h3>
+          <label class="srow"><span>Tamaño máximo (voxels)</span><input type="number" name="max_side" min="4" max="128" step="1"></label>
+          <label class="srow"><span>Colores</span><input type="number" name="colors" min="2" max="48" step="1"></label>
+          <h3>Modelo de lenguaje</h3>
+          <label class="srow"><span>Rondas de revisión</span><input type="number" name="review_rounds" min="0" max="6" step="1"></label>
+          <label class="srow"><span>Esfuerzo</span>
+            <select name="effort">
+              <option value="off">Sin razonar</option><option value="low">Bajo</option><option value="medium">Medio</option>
+              <option value="high">Alto</option><option value="max">Máximo</option>
+            </select></label>
+          <label class="srow"><span>Tokens máximos por respuesta <small>(sin contar el razonamiento)</small></span><input type="number" name="max_tokens" min="1000" max="128000" step="1000"></label>
+          <label class="srow"><span>Tokens para razonar <small>(se suman a la respuesta)</small></span><input type="number" name="thinking_tokens" min="0" max="200000" step="1000"></label>
+          <label class="srow"><span>Tiempo límite por llamada (s)</span><input type="number" name="timeout_s" min="30" max="7200" step="10"></label>
+          <label class="srow"><span>Pintar las referencias sobre la forma</span><input type="checkbox" name="auto_paint"></label>
+          <label class="srow"><span>Generaciones a la vez <small>(al reiniciar)</small></span><input type="number" name="parallel_jobs" min="1" max="6" step="1"></label>
+          <label class="srow col"><span>URL del modelo <small>(vacía: el de la familia, en las Sparks)</small></span><input type="text" name="llm_url" maxlength="300" placeholder="http://servidor:puerto/v1"></label>
+          <label class="srow col"><span>Nombre del modelo <small>(vacío: el que tenga el servidor)</small></span><input type="text" name="llm_model" maxlength="120"></label>
+          <h3>Exportar</h3>
+          <label class="srow"><span>STL: mm por voxel</span><input type="number" name="voxel_mm" min="0.1" max="50" step="0.1"></label>
+          <label class="srow"><span>GLB: metros por voxel</span><input type="number" name="glb_voxel_size" min="0.001" max="10" step="0.001"></label>
+          <h3>Modelos nuevos</h3>
+          <div class="srow"><span>Tamaño (x × y × z)</span>
+            <span class="triple"><input type="number" name="new_size_x" min="1" max="256"><input type="number" name="new_size_y" min="1" max="256"><input type="number" name="new_size_z" min="1" max="256"></span></div>
+          <div class="settings-actions">
+            <button type="button" class="btn small ghost" id="settings-reset">Deshacer cambios</button>
+            <button type="submit" class="btn primary">Guardar ajustes</button>
+          </div>
+        </form>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="statusbar" id="statusbar">
+    <span id="st-size">—</span>
+    <span id="st-count">—</span>
+    <span id="st-cursor">Cursor: —</span>
+    <span class="st-spacer"></span>
+    <span id="st-sym"></span>
+    <span id="st-tool">Herramienta: —</span>
+  </footer>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <div class="dropveil" id="dropveil" hidden><div>Suelta para subir las imágenes<br><small>(.vox para importar un modelo)</small></div></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

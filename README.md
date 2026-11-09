@@ -1,0 +1,47 @@
+# Seurat's Hoard
+
+Voxel studio of the Hoard family. Draw voxel models in a 3D editor, turn pictures and sprites into voxel models, and
+export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites.
+
+- **Editor** (browser or Hoard window, port 5250): add, erase, paint, fill, eyedropper and box tools, X/Z symmetry, a
+  layer slicer to work inside the model, undo/redo, palette editing, autosave with versions you can restore.
+- **Pictures to voxels**
+  - *Instant* (no model): *inflate* (the front puffed up like a cushion), *extrude* (a slab) or *silhouette* (front +
+    side views carved into a block, coloured from each view).
+  - *With the language model* (DeepSeek V4.1 Flash on the Sparks by default, through the family's Hoard Link): it sees
+    the reference pictures and their pixel grids, thinks at length (effort `max` by default, several minutes per round)
+    and sculpts the shape from parts (ellipsoids, tapered capsules for necks and tails, polygon prisms for wings and
+    fins). Seurat paints the pictures onto that shape (front, back, both sides), and the model reviews a contact sheet of
+    its own result (six views, front-silhouette differences, operation errors) for as many rounds as you choose. A round
+    that would empty or wreck the model is undone. Every round is shown with its render, notes and errors; the
+    answers are kept as text next to the renders. Roles per picture: front, side, top, back, extra.
+  - Pixel art enlarged by an integer factor is read at its real size; a flat background colour becomes transparent.
+- **Exports**: `.vox` (MagicaVoxel 150, round trip), `.glb` (vertex colours, greedy-meshed), binary `.stl` in millimetres
+  (closed mesh, z up, setting `voxel_mm`), PNG of any view, and an isometric sprite strip from four sides. `.vox` files
+  can be imported.
+- **Assistants** (MCP, `mcp_server.py`, 27 tools): list/create/edit models with operations (`model_ops`), look at them
+  (`model_look` returns a picture), add references, build or generate from pictures, follow and cancel generations,
+  export, versions, settings.
+
+## The operation language
+
+Axes: x right, y up, z towards the viewer. `c` is a palette index; `c: 0` erases.
+`voxel`, `voxels`, `box`, `line` (with `r`/`r_to`: a tapered capsule), `prism` (a polygon on a plane with thickness:
+wings, fins, ears), `sphere`/`ellipsoid`, `cylinder`, `layer` (pixel rows on the front, side or top
+plane), `inflate` (pixel rows puffed into a volume), `paint` (recolour the surface seen from a side, pixel by pixel),
+`lathe` (solid of revolution), `recolor`, `mirror`, `move`, `clear`. Details in `seurat_hoard/voxels.py`.
+
+## Run
+
+```
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m seurat_hoard
+```
+
+Opens at http://127.0.0.1:5250. The Hoard Hub starts it like the rest of the family. Data (models, references, renders,
+settings, `mcp-token`) in `data/`. Settings: reading size and colours, review rounds, reasoning effort and thinking
+tokens, painting the pictures onto the shape, a fixed
+OpenAI-compatible model URL instead of the family's, STL and GLB scale.
+
+Tests: `.venv\Scripts\python -m pytest`.

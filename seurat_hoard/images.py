@@ -139,6 +139,28 @@ def _pixel_scale(arr: np.ndarray) -> int:
     return g if g >= 2 and h % g == 0 and w % g == 0 else 1
 
 
+def cutout(data: bytes) -> np.ndarray:
+    """The picture as RGBA (h, w, 4) with its flat background made transparent, cropped to the subject and, for pixel
+    art enlarged by a whole factor, back at its real size (a game sprite as the game drew it)."""
+    arr = _crop(_background_to_alpha(np.asarray(load(data)).copy(), []))
+    scale = _pixel_scale(arr)
+    if scale > 1:
+        arr = arr[scale // 2:: scale, scale // 2:: scale]
+    out = arr.copy()
+    out[out[..., 3] < 128] = 0
+    out[out[..., 3] >= 128, 3] = 255
+    return out
+
+
+def is_sprite(data: bytes, limit: int = 160) -> bool:
+    """A small pixel-art picture (a game sprite): at most ``limit`` pixels a side at its real size, few colours."""
+    try:
+        arr = cutout(data)
+    except SeuratError:
+        return False
+    return max(arr.shape[:2]) <= limit and _few_colors(arr)
+
+
 def index_picture(data: bytes, *, max_side: int = 64, colors: int = 16) -> Indexed:
     """``data`` (PNG/JPG/...) to an :class:`Indexed` grid at most ``max_side`` pixels wide or tall, ``colors`` colours."""
     notes: list[str] = []

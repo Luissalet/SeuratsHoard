@@ -12,6 +12,12 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
   - *As an agent* (default): after the design brief, DeepSeek works in a loop like an agent harness: it runs its voxel
     program, gets the result or the error with the failing line, looks at the model from any side, fixes and refines,
     and says when it is finished (step and time budgets in Settings). Every run that works is saved.
+  - *Game sprites as the target* (`target: sprite`, automatic for small pixel art): the front, back and side pictures
+    are overworld sprites to rebuild in 3D, the way voxel mods do it (about one voxel per sprite pixel, the sprite's own
+    colours and design). Those sprites are drawn from a camera above the world, so after every run Seurat renders the
+    model from the same camera (front and back 45 degrees above the horizon, sides 20, both in Settings), brings it to
+    the sprite's resolution and shows the model each sprite next to its render with a silhouette diff (red missing,
+    blue extra) and match scores; the job panel shows them per round.
   - *With the language model, as a program in fixed rounds*: DeepSeek V4.1 Flash first writes a design brief from what it
     knows about the subject and your description (parts, proportions, positions in 3D, palette; pictures are only
     hints, never traced), then a Python program that builds the
@@ -32,8 +38,9 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
 - **Exports**: `.vox` (MagicaVoxel 150, round trip), `.glb` (vertex colours, greedy-meshed), binary `.stl` in millimetres
   (closed mesh, z up, setting `voxel_mm`), PNG of any view, and an isometric sprite strip from four sides. `.vox` files
   and Minecraft `.schem` schematics (WorldEdit) can be imported.
-- **Assistants** (MCP, `mcp_server.py`, 28 tools): list/create/edit models with operations (`model_ops`), look at them
-  (`model_look` returns a picture), add references, build or generate from pictures, follow and cancel generations,
+- **Assistants** (MCP, `mcp_server.py`, 29 tools): list/create/edit models with operations (`model_ops`), look at them
+  (`model_look` returns a picture, also from the game overworld cameras), compare a model with game sprites from their
+  camera (`model_sprite_match`), add references, build or generate from pictures, follow and cancel generations,
   export, versions, settings.
 
 ## The operation language

@@ -31,6 +31,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "agent_step_thinking": 30000,  # thinking per agent action (the server caps a call at 32768 with the answer)
     "code_size": 64,         # grid side for code generations (without a size of their own)
     "program_timeout_s": 180, # time limit for one voxel program
+    "sprite_pitch": 45,      # sprite target: degrees above the horizon of the camera that drew the front/back sprites
+    "sprite_side_pitch": 20, # ... and of the camera that drew the side sprites
     "paint_sides": False,    # also paint the side picture on both sides (side sprites rarely match the sculpted side)
     "parallel_jobs": 1,      # generations running at the same time (read at start); one at a time thinks faster
     "llm_url": "",           # empty: the family's model (DeepSeek on the Sparks through Hoard Link); else an OpenAI-compatible URL
@@ -141,6 +143,8 @@ def normalize(data: dict[str, Any]) -> dict[str, Any]:
     data["agent_step_thinking"] = _clamp(data["agent_step_thinking"], 0, 200000)
     data["code_size"] = _clamp(data["code_size"], 8, 128)
     data["program_timeout_s"] = _clamp(data["program_timeout_s"], 5, 600)
+    data["sprite_pitch"] = _clamp(data["sprite_pitch"], 0, 89)
+    data["sprite_side_pitch"] = _clamp(data["sprite_side_pitch"], 0, 89)
     data["llm_url"] = str(data.get("llm_url") or "").strip()
     data["llm_model"] = str(data.get("llm_model") or "").strip()
     data["voxel_mm"] = _clamp(data["voxel_mm"], 0.1, 50.0, float)

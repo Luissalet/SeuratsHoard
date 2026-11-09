@@ -270,8 +270,18 @@ function genParams() {
     colors: parseInt($('gen-colors').value, 10),
     effort: $('gen-effort').value,
     method: $('gen-method').value,
-    ...(used.length && !['code', 'agent'].includes($('gen-method').value) ? {} : { size: Array(3).fill(parseInt($('gen-size').value, 10)) }),
+    target: $('gen-target').value,
+    // with game sprites as the target the grid follows the sprites (about one voxel per pixel)
+    ...((used.length && !['code', 'agent'].includes($('gen-method').value)) || spriteTarget(used) ? {} : { size: Array(3).fill(parseInt($('gen-size').value, 10)) }),
   };
+}
+
+function spriteTarget(used) {
+  const t = $('gen-target').value;
+  if (t === 'free' || $('gen-method').value !== 'agent') return false;
+  const views = used.filter((r) => ['front', 'back', 'side'].includes(roleOf(r.id)));
+  if (!views.length) return false;
+  return t === 'sprite' || views.every((r) => Math.max(r.width || 999, r.height || 999) <= 160);
 }
 
 async function startGeneration(params) {
@@ -430,6 +440,9 @@ function renderJob(d) {
       el('div', {},
         el('div', { class: 'round-title', text: isStart ? `Inicio (${START_LABEL[(r.notes || '').replace('inicio: ', '')] || r.notes})` : `Ronda ${r.round}` }),
         el('div', { class: 'round-meta', text: `${nf.format(r.count)} voxels${isStart ? '' : ` · ${r.applied} operaciones`}${r.size ? ` · ${r.size.join('×')}` : ''}` }),
+        r.match !== undefined ? el('div', { class: 'round-meta', text: `Coincidencia con los sprites: ${r.match.toFixed(2)} (${(r.views || []).map((v) => `${v.role} ${v.iou.toFixed(2)}`).join(', ')})` }) : null,
+        r.sprite_render ? el('img', { class: 'sprite-cmp', src: `/renders/${r.sprite_render}`, alt: 'Sprites frente al modelo', loading: 'lazy',
+          onclick: () => showRender({ ...r, render: r.sprite_render }) }) : null,
         !isStart && r.notes ? el('div', { class: 'round-notes', text: r.notes }) : null,
         r.errors && r.errors.length ? el('ul', { class: 'round-errors' }, ...r.errors.map((e) => el('li', { text: e }))) : null)));
   }
@@ -535,6 +548,7 @@ function initSettings() {
       max_side: +f.max_side.value, colors: +f.colors.value, review_rounds: +f.review_rounds.value, effort: f.effort.value,
       max_tokens: +f.max_tokens.value, thinking_tokens: +f.thinking_tokens.value, timeout_s: +f.timeout_s.value,
       method: f.method.value, agent_steps: +f.agent_steps.value, agent_minutes: +f.agent_minutes.value, code_size: +f.code_size.value, program_timeout_s: +f.program_timeout_s.value,
+      sprite_pitch: +f.sprite_pitch.value, sprite_side_pitch: +f.sprite_side_pitch.value,
       auto_paint: f.auto_paint.checked, paint_sides: f.paint_sides.checked, parallel_jobs: +f.parallel_jobs.value, llm_url: f.llm_url.value.trim(), llm_model: f.llm_model.value.trim(),
       voxel_mm: +f.voxel_mm.value, glb_voxel_size: +f.glb_voxel_size.value,
       new_size: [+f.new_size_x.value, +f.new_size_y.value, +f.new_size_z.value],
@@ -557,7 +571,7 @@ function fillSettings(s, defaults) {
   if (!s) return;
   if (!settingsDirty) {
     const f = $('settings-form').elements;
-    for (const k of ['max_side', 'colors', 'review_rounds', 'effort', 'max_tokens', 'thinking_tokens', 'parallel_jobs', 'method', 'agent_steps', 'agent_minutes', 'code_size', 'program_timeout_s', 'timeout_s', 'llm_url', 'llm_model', 'voxel_mm', 'glb_voxel_size']) {
+    for (const k of ['max_side', 'colors', 'review_rounds', 'effort', 'max_tokens', 'thinking_tokens', 'parallel_jobs', 'method', 'agent_steps', 'agent_minutes', 'code_size', 'program_timeout_s', 'sprite_pitch', 'sprite_side_pitch', 'timeout_s', 'llm_url', 'llm_model', 'voxel_mm', 'glb_voxel_size']) {
       if (f[k] && s[k] !== undefined) f[k].value = s[k];
     }
     if (f.auto_paint) f.auto_paint.checked = s.auto_paint !== false;

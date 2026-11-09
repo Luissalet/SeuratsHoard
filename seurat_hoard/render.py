@@ -17,7 +17,10 @@ from .voxels import VoxelModel
 
 ORTHO = ("front", "back", "left", "right", "top", "bottom")
 ISO = ("iso", "iso_front_left", "iso_back_left", "iso_back_right")   # iso = seen from front-right
-VIEWS = ORTHO + ISO + ("sheet",)
+#: Handheld-game overworld cameras: the front and back sprites are seen from well above, the side ones nearly in profile.
+OVERWORLD = {"overworld_front": (0.0, 45.0), "overworld_back": (180.0, 45.0), "overworld_left": (-90.0, 20.0),
+             "overworld_right": (90.0, 20.0)}
+VIEWS = ORTHO + ISO + tuple(OVERWORLD) + ("sheet",)
 BG_DARK = (26, 22, 30, 255)
 
 
@@ -128,6 +131,71 @@ def iso(model: VoxelModel, view: str = "iso", size: int = 8, background=(0, 0, 0
     return img
 
 
+_NORMALS = np.array([[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]], dtype=np.float64)
+# corners of each face of the unit cube at the origin, in drawing order
+_FACES = {
+    0: [(1, 0, 0), (1, 1, 0), (1, 1, 1), (1, 0, 1)], 1: [(0, 0, 0), (0, 0, 1), (0, 1, 1), (0, 1, 0)],
+    2: [(0, 1, 0), (0, 1, 1), (1, 1, 1), (1, 1, 0)], 3: [(0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)],
+    4: [(0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)], 5: [(0, 0, 0), (0, 1, 0), (1, 1, 0), (1, 0, 0)]}
+_LIGHT = np.array([-0.35, 1.0, 0.55]) / np.linalg.norm([-0.35, 1.0, 0.55])
+
+
+def camera_basis(yaw: float, pitch: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(towards the camera, screen right, screen up) for a camera at ``yaw`` degrees around the model (0 = in front, on
+    +z; 90 = on +x; 180 = behind; -90 = on -x) and ``pitch`` degrees above the horizon."""
+    yw, pt = np.radians(yaw), np.radians(max(-89.0, min(89.0, pitch)))
+    c = np.array([np.sin(yw) * np.cos(pt), np.sin(pt), np.cos(yw) * np.cos(pt)])
+    r = np.cross([0.0, 1.0, 0.0], c)
+    r /= np.linalg.norm(r)
+    return c, r, np.cross(c, r)
+
+
+def camera(model: VoxelModel, yaw: float = 0.0, pitch: float = 30.0, scale: float = 6.0, background=(0, 0, 0, 0),
+           shade: bool = True) -> Image.Image:
+    """Orthographic picture from any direction (see :func:`camera_basis`), ``scale`` pixels per voxel edge. Faces are
+    lit from above-front-left; this is how a game camera looking down on the model sees it."""
+    g = model.grid
+    occ = g > 0
+    if not occ.any():
+        return Image.new("RGBA", (8, 8), background)
+    c, r, u = camera_basis(yaw, pitch)
+    pad = np.pad(occ, 1)
+    sx, sy, sz = g.shape
+    exposed = [~pad[2:, 1:-1, 1:-1], ~pad[:-2, 1:-1, 1:-1], ~pad[1:-1, 2:, 1:-1], ~pad[1:-1, :-2, 1:-1],
+               ~pad[1:-1, 1:-1, 2:], ~pad[1:-1, 1:-1, :-2]]
+    faces = [f for f in range(6) if _NORMALS[f] @ c > 1e-6]
+    pal = model.palette_rgb().astype(np.float64)
+    corner = np.array([[0, 0, 0], [sx, 0, 0], [0, sy, 0], [0, 0, sz], [sx, sy, 0], [sx, 0, sz], [0, sy, sz], [sx, sy, sz]], np.float64)
+    us, vs = corner @ r, corner @ u
+    u0, v1 = us.min(), vs.max()
+    w_px, h_px = int(np.ceil((us.max() - u0) * scale)) + 2, int(np.ceil((v1 - vs.min()) * scale)) + 2
+    img = Image.new("RGBA", (w_px, h_px), background)
+    draw = ImageDraw.Draw(img)
+    items = []
+    for f in faces:
+        xs, ys, zs = np.nonzero(occ & exposed[f])
+        if not len(xs):
+            continue
+        k = (0.5 + 0.5 * max(0.0, float(_NORMALS[f] @ _LIGHT))) if shade else 1.0
+        items.append((f, xs, ys, zs, k))
+    if not items:
+        return img
+    allx = np.concatenate([it[1] for it in items]); ally = np.concatenate([it[2] for it in items])
+    allz = np.concatenate([it[3] for it in items])
+    fid = np.concatenate([np.full(len(it[1]), it[0]) for it in items])
+    kk = np.concatenate([np.full(len(it[1]), it[4]) for it in items])
+    depth = (allx + 0.5) * c[0] + (ally + 0.5) * c[1] + (allz + 0.5) * c[2]
+    order = np.argsort(depth, kind="stable")
+    quad = {f: np.array(_FACES[f], np.float64) for f in range(6)}
+    for i in order:
+        x, y, z, f = allx[i], ally[i], allz[i], fid[i]
+        pts = quad[f] + (x, y, z)
+        pu, pv = (pts @ r - u0) * scale + 1, (v1 - pts @ u) * scale + 1
+        col = np.clip(pal[g[x, y, z]] * kk[i], 0, 255).astype(int)
+        draw.polygon(list(zip(pu.tolist(), pv.tolist())), fill=(int(col[0]), int(col[1]), int(col[2]), 255))
+    return img
+
+
 def _label(img: Image.Image, text: str) -> Image.Image:
     out = Image.new("RGBA", (img.width, img.height + 18), BG_DARK)
     out.paste(img, (0, 18), img)
@@ -169,6 +237,9 @@ def render(model: VoxelModel, view: str = "iso", *, size: Optional[int] = None, 
         return ortho(model, view, scale, bg)
     if view in ISO:
         return iso(model, view, size if size else max(2, int(512 / (longest * 1.9))), bg)
+    if view in OVERWORLD:
+        yaw, pitch = OVERWORLD[view]
+        return camera(model, yaw, pitch, size if size else max(2, 512 / (longest * 1.5)), bg)
     raise SeuratError("invalid", f"Unknown view {view!r}; use one of {', '.join(VIEWS)}.")
 
 

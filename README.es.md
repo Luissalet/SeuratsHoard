@@ -22,7 +22,9 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
     prompt. Frente y espalda están dibujados desde unos 45 grados (su eje horizontal es exactamente x; en Ajustes). Tras
     cada ejecución Seurat proyecta el modelo desde la cámara de cada sprite a un voxel por píxel y le enseña cada sprite
     junto a él con la diferencia de silueta (rojo falta, azul sobra), la coincidencia y cómo le va de tamaño; el panel del
-    trabajo las enseña por ronda.
+    trabajo las enseña por ronda. El agente sabe cuándo una ejecución es peor que su mejor versión y se guarda la mejor,
+    no la última. `continue_from` continúa una generación desde el programa y el brief de un modelo (restaura antes el
+    paso que quieras).
   - *Con el modelo de lenguaje, como programa por rondas fijas*: DeepSeek V4.1 Flash escribe primero un brief de diseño con
     lo que sabe del tema y tu descripción (partes, proporciones, posición en 3D, paleta; las imágenes son solo pistas,
     nunca se calcan) y después un programa en Python que

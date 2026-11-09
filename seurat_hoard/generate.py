@@ -94,10 +94,10 @@ ANSWER with ONE JSON object and nothing else:
 {"notes":"one or two sentences on what you built","palette_add":["#rrggbb", ...],"ops":[ ... ]}
 palette_add (optional) appends colours: the first new one gets the next free index."""
 
-PAINT_AUTO = ("Seurat paints the reference pictures onto your shape automatically after every round (front picture on "
-              "the front, back picture on the back, side picture on both sides), so your job is the SHAPE: the volume, "
-              "the silhouette from every side and the colour of each part. You only need paint for details the pictures "
-              "cannot give (underside, top).")
+PAINT_AUTO = ("Seurat paints the front picture onto the front of your shape and the back picture onto its back "
+              "automatically after every round, so your job is the SHAPE: the volume, the silhouette from every side and "
+              "the colour of each part (the sides, top and underside keep your part colours, so choose them well and add "
+              "darker shades there with paint where it helps).")
 PAINT_TEXT = ("There are no reference pictures: build from the description. Give every part its own palette colour, "
               "with darker shades on the undersides and the back, and add small details (eyes, windows, patterns) with "
               "paint or single voxels. For a scene, lay out a ground first, then the objects on it, each from parts.")
@@ -417,8 +417,13 @@ class Generator:
             answer = ask(text)
             llm_name = answer.model or llm_name
             self._save_answer(job, rnd, answer.text)
+            if answer.reasoning:
+                self._save_answer(job, rnd, answer.reasoning, suffix="-think")
+            if answer.followed_up:
+                job.say(f"ronda {rnd}: el razonamiento terminó por {answer.first_finish or '?'} sin respuesta; se pide aparte")
             job.say(f"respuesta de {llm_name or 'el modelo'} en {answer.seconds:.0f} s, ~{len(answer.text) // 4} tokens"
                     + (f" tras pensar {answer.reasoning_tokens} tokens" if answer.reasoning_tokens else "")
+                    + (f" en {answer.thinking_calls} llamadas" if answer.thinking_calls > 1 else "")
                     + (" (la respuesta se pidió aparte con su razonamiento)" if answer.followed_up else "")
                     + {"length": " (cortada por el límite de tokens)", "loop": " (cortada: se repetía)", "think_budget": "",
                        "timeout": " (cortada por tiempo)"}.get(answer.finish, ""))
@@ -502,7 +507,9 @@ class Generator:
         sx, sy, sz = model.size
         before = model.grid.copy()
         ops: list[dict[str, Any]] = []
-        for _, ix, _ in refs.get("side", [])[:1]:
+        # Side sprites are drawn from another angle and squashed: painted onto the sculpted side they scatter outline
+        # pixels over wings and neck. Only with paint_sides on.
+        for _, ix, _ in (refs.get("side", [])[:1] if self.svc.settings["paint_sides"] else []):
             rows = self._map_rows(ix, model.palette)
             z0 = max(0, (sz - ix.width) // 2)
             ops.append({"op": "paint", "side": "left", "origin": [z0, 0], "rows": rows})

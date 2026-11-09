@@ -37,6 +37,8 @@ class Answer:
     reasoning: str = ""         # the thinking itself, when the server streams it
     reasoning_tokens: int = 0   # streamed thinking chunks (about one token each)
     followed_up: bool = False   # the answer came from a second call that reused the thinking
+    first_finish: str = ""      # why the thinking call ended, when there was a second call
+    thinking_calls: int = 1     # calls the thinking took (the server caps each one)
 
 
 def _looping(text: str, window: int = 2000) -> bool:
@@ -134,13 +136,36 @@ class ModelClient:
         if budget:
             body["max_tokens"] = max_tokens + budget + 2000              # the budget is enforced while streaming
         answer = self._send(url, body, timeout, on_progress, cancel, budget)
+        # The server stops one call's thinking at its own cap (32 768 tokens on the Sparks' DeepSeek) without an answer:
+        # continue it in new calls that carry the reasoning so far, until it answers or the budget is spent.
+        reasoning, spent, seconds, calls = answer.reasoning, answer.reasoning_tokens, answer.seconds, 1
+        while (thinking and budget and answer.finish not in ("cancelled", "think_budget", "loop", "timeout")
+               and "{" not in answer.text and answer.reasoning_tokens > 1000 and spent < budget - 2000 and calls < 40):
+            if on_progress:
+                base = spent
+                progress = (lambda t, r, base=base: on_progress(t, base + r))
+            else:
+                progress = None
+            more = self._continue(body, reasoning, max_tokens, budget - spent)
+            answer = self._send(url, more, timeout, progress, cancel, budget - spent)
+            reasoning += "\n" + answer.reasoning
+            spent += answer.reasoning_tokens
+            seconds += answer.seconds
+            calls += 1
+        if calls > 1 and "{" in answer.text:
+            return Answer(answer.text, answer.model, answer.finish, len(reasoning), seconds, reasoning, spent, False,
+                          "", calls)
+        if calls > 1:
+            answer = Answer(answer.text, answer.model, answer.finish, len(reasoning), seconds, reasoning, spent, False,
+                            answer.finish, calls)
         if thinking and answer.finish != "cancelled" and answer.reasoning and "{" not in answer.text:
             # The thinking used the whole budget (or the server cut it) before any answer: ask again WITHOUT thinking,
             # handing the model its own reasoning, so the minutes of planning turn into operations.
             follow = self._follow_up(body, answer.reasoning, max_tokens)
             second = self._send(url, follow, timeout, on_progress, cancel, 0)
             return Answer(second.text, second.model or answer.model, second.finish, len(answer.reasoning),
-                          answer.seconds + second.seconds, answer.reasoning, answer.reasoning_tokens, True)
+                          answer.seconds + second.seconds, answer.reasoning, answer.reasoning_tokens, True,
+                          answer.finish or "end of stream", answer.thinking_calls)
         return answer
 
     def _send(self, url, body, timeout, on_progress, cancel, budget) -> Answer:
@@ -152,6 +177,20 @@ class ModelClient:
         except _RetryWithoutJson:
             body.pop("response_format", None)
             return self._stream(url, body, timeout, on_progress, cancel, budget)
+
+    @staticmethod
+    def _continue(body: dict[str, Any], reasoning: str, max_tokens: int, left: int) -> dict[str, Any]:
+        keep = 700_000
+        if len(reasoning) > keep:
+            reasoning = reasoning[: keep // 3] + "\n[...]\n" + reasoning[-(keep * 2 // 3):]
+        more = dict(body)
+        more["messages"] = list(body["messages"]) + [
+            {"role": "assistant", "content": "My reasoning so far (private notes, not the answer):\n" + reasoning},
+            {"role": "user", "content": "Your thinking was cut by the server's length limit. Continue reasoning from exactly "
+                                        "where it stopped (do not start over or repeat it); when the plan is complete, write "
+                                        "the final answer: ONE JSON object exactly as the instructions say."}]
+        more["max_tokens"] = max_tokens + left + 2000
+        return more
 
     @staticmethod
     def _follow_up(body: dict[str, Any], reasoning: str, max_tokens: int) -> dict[str, Any]:

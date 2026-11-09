@@ -528,7 +528,7 @@ function initSettings() {
     const body = {
       max_side: +f.max_side.value, colors: +f.colors.value, review_rounds: +f.review_rounds.value, effort: f.effort.value,
       max_tokens: +f.max_tokens.value, thinking_tokens: +f.thinking_tokens.value, timeout_s: +f.timeout_s.value,
-      auto_paint: f.auto_paint.checked, parallel_jobs: +f.parallel_jobs.value, llm_url: f.llm_url.value.trim(), llm_model: f.llm_model.value.trim(),
+      auto_paint: f.auto_paint.checked, paint_sides: f.paint_sides.checked, parallel_jobs: +f.parallel_jobs.value, llm_url: f.llm_url.value.trim(), llm_model: f.llm_model.value.trim(),
       voxel_mm: +f.voxel_mm.value, glb_voxel_size: +f.glb_voxel_size.value,
       new_size: [+f.new_size_x.value, +f.new_size_y.value, +f.new_size_z.value],
     };
@@ -554,6 +554,7 @@ function fillSettings(s, defaults) {
       if (f[k] && s[k] !== undefined) f[k].value = s[k];
     }
     if (f.auto_paint) f.auto_paint.checked = s.auto_paint !== false;
+    if (f.paint_sides) f.paint_sides.checked = !!s.paint_sides;
     const [x, y, z] = s.new_size || [32, 32, 32];
     f.new_size_x.value = x; f.new_size_y.value = y; f.new_size_z.value = z;
   }

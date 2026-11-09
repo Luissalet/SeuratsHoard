@@ -11,7 +11,7 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
   - *With the language model* (DeepSeek V4.1 Flash on the Sparks by default, through the family's Hoard Link): it sees
     the reference pictures and their pixel grids, thinks at length (effort `max` by default, several minutes per round)
     and sculpts the shape from parts (ellipsoids, tapered capsules for necks and tails, polygon prisms for wings and
-    fins). Seurat paints the pictures onto that shape (front, back, both sides), and the model reviews a contact sheet of
+    fins). Seurat paints the pictures onto that shape (front and back; the side picture too if you switch it on), and the model reviews a contact sheet of
     its own result (six views, front-silhouette differences, operation errors) for as many rounds as you choose. A round
     that would empty or wreck the model is undone. Every round is shown with its render, notes and errors; the
     answers are kept as text next to the renders. Roles per picture: front, side, top, back, extra.

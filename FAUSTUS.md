@@ -20,7 +20,7 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
   OpenAI-compatible URL from Settings. By default it reasons at the highest level (effort `max`: up to 200 000 thinking
   tokens per round, counted exactly from the server's usage; when the thinking reaches that budget, or the server cuts
   it, a second call without thinking gets the whole reasoning and writes the answer, up to 24 000 tokens) and sculpts the shape from parts on an empty grid; Seurat then
-  paints the reference pictures onto the shape (front, back, both sides) after every round, so the model works on
+  paints the front and back pictures onto the shape after every round (the side picture only with `paint_sides`), so the model works on
   volume and the colours come from the pictures. Answers are constrained to JSON, streamed (progress while thinking,
   instant cancel, loops in the answer or the thinking cut), and reviewed for rounds with a six-view contact sheet and the
   front-silhouette differences. A round that empties, only clears or destroys most of the model is undone and the model

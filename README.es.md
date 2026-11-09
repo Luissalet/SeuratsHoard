@@ -31,7 +31,7 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
 - **Exportar**: `.vox` (MagicaVoxel 150, ida y vuelta), `.glb` (colores por vértice, mallado agrupado), `.stl` binario
   en milímetros (malla cerrada, z arriba, ajuste `voxel_mm`), PNG de cualquier vista y una tira de sprites isométricos
   desde cuatro lados. Los `.vox` se pueden importar.
-- **Asistentes** (MCP, `mcp_server.py`, 27 herramientas): listar, crear y editar modelos con operaciones (`model_ops`),
+- **Asistentes** (MCP, `mcp_server.py`, 28 herramientas): listar, crear y editar modelos con operaciones (`model_ops`),
   verlos (`model_look` devuelve una imagen), añadir referencias, construir o generar desde imágenes, seguir y cancelar
   generaciones, exportar, versiones y ajustes.
 

@@ -28,7 +28,7 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
 - **Exports**: `.vox` (MagicaVoxel 150, round trip), `.glb` (vertex colours, greedy-meshed), binary `.stl` in millimetres
   (closed mesh, z up, setting `voxel_mm`), PNG of any view, and an isometric sprite strip from four sides. `.vox` files
   can be imported.
-- **Assistants** (MCP, `mcp_server.py`, 27 tools): list/create/edit models with operations (`model_ops`), look at them
+- **Assistants** (MCP, `mcp_server.py`, 28 tools): list/create/edit models with operations (`model_ops`), look at them
   (`model_look` returns a picture), add references, build or generate from pictures, follow and cancel generations,
   export, versions, settings.
 

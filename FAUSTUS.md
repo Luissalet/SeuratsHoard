@@ -1,6 +1,6 @@
 # Seurat's Hoard — what it can and cannot do
 
-App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_server.py` (27 tools; `model_look` and
+App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_server.py` (28 tools; `model_look` and
 `reference_look` return MCP images). Connector preset: its own `faustus-plugin.json`.
 
 ## Can
@@ -23,6 +23,8 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
   functools/colorsys, source checked for files/processes/dunder names, `program_timeout_s` limit. Each round renders the
   result and asks for a complete better program; failures and empty grids are fed back; the last working program is
   stored in the model's `source.program`. Grid `code_size` (64) or the call's `size`, up to 128.
+- Run a voxel program directly (`model_program`): into a new model or replacing one (kept as a version); the program
+  stays in the model's source. Code generations save each working round as they go (a restart loses nothing).
 - Generations with the language model (`generate_start` → `generate_status`): DeepSeek V4.1 Flash on the Sparks by
   default (resolved through Hoard Link and Faustus's registry, also while Faustus runs on a Spark), or any
   OpenAI-compatible URL from Settings. By default it reasons at the highest level (effort `max`: up to 200 000 thinking

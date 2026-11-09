@@ -130,8 +130,11 @@ PALETTE = ["#rrggbb", ...]   # up to 40 colours; index 1 is the FIRST colour; 0 
 def build(g):                # g: numpy uint8 array, shape (X, Y, Z), all zeros
     ...                      # g[x, y, z] = colour index (or masks: g[mask] = c)
 Axes: x to the right, y UP (y = 0 is the ground), z TOWARDS the viewer. The subject faces +z (looks at the viewer).
-Ready without import: np (numpy), math, X, Y, Z, and xs, ys, zs (float32 arrays of the grid's shape with each voxel's
-coordinates, for masks such as g[((xs-cx)/rx)**2 + ((ys-cy)/ry)**2 + ((zs-cz)/rz)**2 <= 1] = c), plus helpers:
+Ready without import: np (numpy), math, X, Y, Z, and xs, ys, zs (float32 arrays of the grid's shape (X, Y, Z) with each
+voxel's coordinates, for masks such as g[((xs-cx)/rx)**2 + ((ys-cy)/ry)**2 + ((zs-cz)/rz)**2 <= 1] = c); gx, gz (2D
+ground coordinates, shape (X, Z)) for height maps. SHAPES: 3D masks are (X, Y, Z); a 2D ground map H is (X, Z) and must
+be compared as H[:, None, :] (e.g. g[ys <= H[:, None, :]] = c), or use column_fill. Helpers:
+  column_fill(g, c, height, base=None)    fill every ground column up to height[x, z] (terrain, hills, water)
   ellipsoid(g, c, center, radii)          sphere(g, c, center, r)
   capsule(g, c, a, b, r0, r1=None)        tube from point a to point b, radius r0 tapering to r1: necks, tails, legs,
                                           horns, single feathers, spikes, fingers
@@ -670,13 +673,34 @@ class Generator:
             else:
                 self._save_answer(job, rnd, code, suffix=".py")
                 job.say(f"ronda {rnd}: ejecutando el programa ({len(code.splitlines())} líneas)")
-                try:
-                    res = run_program(code, model.size, timeout=float(settings["program_timeout_s"]))
-                except ProgramError as exc:
+                res, fail = None, None
+                for attempt in range(3):          # a crash is usually one line: up to two quick fixes without thinking
+                    try:
+                        res = run_program(code, model.size, timeout=float(settings["program_timeout_s"]))
+                        break
+                    except ProgramError as exc:
+                        fail = exc
+                        job.say(f"ronda {rnd}: el programa falló ({exc.message[:160]})" + ("; se pide el arreglo" if attempt < 2 else ""))
+                        if attempt == 2 or job.cancel.is_set():
+                            break
+                        fix_text = ("\n".join(lines) + f"\n\nThis program FAILED with {exc.message}\n{exc.trace}\n\nFix the error (and any "
+                                    "similar mistake elsewhere) without changing what the program builds. Answer ONE JSON object "
+                                    "{\"notes\": \"...\", \"code\": \"<the complete fixed program>\"}.\n\n```python\n" + code + "\n```")
+                        fixed = client.chat(CODE_SYSTEM, fix_text, [], max_tokens=max_tokens, effort="off", timeout=timeout,
+                                            on_progress=progress, cancel=job.cancel)
+                        try:
+                            new_code = parse_json(fixed.text).get("code")
+                        except ValueError:
+                            new_code = None
+                        if not isinstance(new_code, str) or not new_code.strip():
+                            break
+                        code = new_code
+                        self._save_answer(job, rnd, code, suffix=f"-fix{attempt + 1}.py")
+                if res is None:
+                    exc = fail
                     problem = f"YOUR LAST PROGRAM FAILED: {exc.message}\n{exc.trace}".strip()
                     result["errors"] = [exc.message[:300]]
-                    job.say(f"ronda {rnd}: el programa falló: {exc.message[:200]}")
-                else:
+                if res is not None:
                     if res.count == 0:
                         problem = "YOUR LAST PROGRAM LEFT THE GRID EMPTY (did build(g) write into g?)."
                         result["errors"] = ["empty grid"]

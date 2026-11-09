@@ -247,12 +247,12 @@ def test_code_generation_runs_the_program_and_keeps_it(tmp_path):
         job = c.post("/api/generate", json={"prompt": "a small bird", "rounds": 2, "size": [24, 24, 24]}).json()
         st = c.get(f"/api/jobs/{job['job_id']}").json()
         assert st["status"] == "done", st
-        assert st["rounds"][1]["errors"] and "not allowed" in st["rounds"][1]["errors"][0]
+        assert not st["rounds"][1]["errors"] and any("se pide el arreglo" in l["text"] for l in st["log"])   # fixed in place
         model = c.get(f"/api/models/{st['model_id']}").json()
         assert model["count"] > 100 and model["palette"][:2] == ["#f0f0f0", "#2040a0"] and model["size"] == [24, 24, 24]
         assert "mirror_x(g)" in model["source"]["program"] and model["source"]["method"] == "code"
         second = link.calls[1]["messages"][1]["content"]
-        assert "FAILED" in second and "import os" in second
+        assert "FAILED" in second and "import os" in second and link.calls[1]["effort"] == "off"   # the quick fix
         assert "DESIGN BRIEF" in link.calls[0]["messages"][1]["content"] and "four feathers" in second
         assert model["source"]["brief"].startswith("A small round bird") and st["brief"]
 

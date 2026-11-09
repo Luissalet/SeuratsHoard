@@ -36,6 +36,14 @@ def _import(name, globals=None, locals=None, fromlist=(), level=0):
 def helpers(shape):
     X, Y, Z = shape
     xs, ys, zs = np.indices(shape, dtype=np.float32)
+    gx, gz = np.indices((X, Z), dtype=np.float32)          # 2D ground coordinates (X, Z) for height maps
+
+    def column_fill(g, c, height, base=None):
+        """Fill each ground column (x, z) from base (default 0) up to height[x, z] (2D arrays of shape (X, Z), or
+        numbers): terrain, hills, plateaus, water levels."""
+        h = np.broadcast_to(np.asarray(height, np.float32), (X, Z))[:, None, :]
+        b = np.broadcast_to(np.asarray(0 if base is None else base, np.float32), (X, Z))[:, None, :]
+        return _set(g, (ys >= b) & (ys <= h), c)
 
     def _set(g, mask, c):
         g[mask] = c
@@ -98,7 +106,8 @@ def helpers(shape):
         """Recolour colour c to c_dark below height below_y (undersides)."""
         return _set(g, (g == c) & (ys < below_y), c_dark)
 
-    return {"X": X, "Y": Y, "Z": Z, "xs": xs, "ys": ys, "zs": zs, "ellipsoid": ellipsoid, "sphere": sphere,
+    return {"X": X, "Y": Y, "Z": Z, "xs": xs, "ys": ys, "zs": zs, "gx": gx, "gz": gz, "column_fill": column_fill,
+            "ellipsoid": ellipsoid, "sphere": sphere,
             "capsule": capsule, "box": box, "polygon": polygon, "mirror_x": mirror_x, "shade_by_height": shade_by_height}
 
 
@@ -126,9 +135,12 @@ def main() -> None:
         np.savez_compressed(req["out"], grid=g, palette=np.array([str(c) for c in palette][:255]))
         print(json.dumps({"ok": True, "count": int(np.count_nonzero(g))}))
     except BaseException as exc:  # noqa: BLE001
-        tb = traceback.format_exc().splitlines()
-        lines = [ln for ln in tb if "voxel program" in ln or not ln.startswith("  File")][-8:]
-        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}", "trace": "\n".join(lines)[-1500:]}))
+        src = req["code"].splitlines()
+        where = []
+        for fr in traceback.extract_tb(exc.__traceback__):
+            if fr.filename == "<voxel program>" and 0 < (fr.lineno or 0) <= len(src):
+                where.append(f"line {fr.lineno}, in {fr.name}: {src[fr.lineno - 1].strip()}")
+        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}", "trace": "\n".join(where[-6:])[-1500:]}))
 
 
 if __name__ == "__main__":

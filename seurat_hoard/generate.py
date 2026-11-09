@@ -467,7 +467,16 @@ class Generator:
         else:
             name = (p.get("name") or "").strip() or str(p.get("prompt")).strip().split("\n")[0][:60]
         into = p.get("into") or ""
-        if start == "current":
+        cont = p.get("continue_from") or ""
+        if cont:
+            # carry on an agent generation: the model's program, brief and grid are the starting point
+            if method != "agent" or not use_model:
+                raise SeuratError("invalid", "continue_from needs method agent.")
+            model = self.svc.store.get(cont)
+            if not (model.source or {}).get("program"):
+                raise SeuratError("invalid", f"Model {cont!r} has no voxel program to continue from.")
+            name, start = model.name, "continue"
+        elif start == "current":
             model = self.svc.store.get(into)
             model.palette, _ = merge(model.palette, palette, limit=255)
         else:
@@ -496,7 +505,7 @@ class Generator:
                 model = builders.build(start, front, side=side, top=top, depth=depth, name=name, base_palette=palette)
             if depth and model.size[2] < depth:
                 model.resize([model.size[0], model.size[1], depth])
-        if method in ("code", "agent") and not into:
+        if method in ("code", "agent") and not into and not cont:
             # Each working program is saved as it comes, so a crash or a restart part-way loses nothing.
             model.id, model.name = self.svc.store.new_id(), name
         job.say(f"modelo inicial: {start}, {model.size[0]}x{model.size[1]}x{model.size[2]}, {model.count} voxels")
@@ -891,8 +900,14 @@ class Generator:
             lines.append("Colours seen in the pictures (hints only): " + ", ".join(ref_colors[:24]))
         if not refs:
             lines.append("There are no pictures: build it from the description.")
-        brief, llm_name, cancelled = self._write_brief(job, client, lines, ref_images, effort, max_tokens, thinking_tokens, timeout,
-                                                       extra=brief_extra)
+        cont = p.get("continue_from") or ""
+        if cont and (model.source or {}).get("brief"):
+            brief, llm_name, cancelled = str(model.source["brief"]), "", False
+            job.brief = brief
+            job.say("se continúa desde el programa y el brief del modelo")
+        else:
+            brief, llm_name, cancelled = self._write_brief(job, client, lines, ref_images, effort, max_tokens, thinking_tokens,
+                                                           timeout, extra=brief_extra)
         if cancelled:
             return llm_name
         if brief:
@@ -901,6 +916,19 @@ class Generator:
         history: list[dict[str, Any]] = []
         user_text, user_images = "\n".join(lines), list(ref_images)
         last_code, runs = "", 0
+        best: dict[str, Any] = {"score": -1.0, "step": 0, "code": "", "grid": None, "palette": None}
+        if cont:
+            last_code = str(model.source["program"])
+            matches = spritecam.match(model, sprites, fb_pitch, side_pitch) if sprites else []
+            score = spritecam.mean_iou(matches)
+            if sprites:
+                best.update(score=score, step=0, code=last_code, grid=model.grid.copy(), palette=list(model.palette))
+                job.match = score
+            user_text += ("\n\nYou are CONTINUING an earlier generation. Your best program so far is below; it built the "
+                          "current model" + (f" (mean silhouette match {score:.2f}):\n" + "\n".join(m.summary() for m in matches)
+                                             if sprites else "") + "\nThe pictures show it" + (" (sprite comparison, then contact sheet)" if sprites else "")
+                          + ". Improve it: fix the worst views first and change a few things at a time.\n```python\n" + last_code + "\n```")
+            user_images = ([png_bytes(spritecam.sheet(matches))] if sprites else list(ref_images)) + [png_bytes(sheet(model, 1100))]
         for step in range(1, max_steps + 1):
             if job.cancel.is_set():
                 break
@@ -990,6 +1018,8 @@ class Generator:
                 self.svc.store.save(model, version_note=f"generation {job.id} step {step}" + (f" (sprite match {score:.2f})" if sprites else ""))
                 job.model_id, job.model_name = model.id, model.name
             job.match = max(job.match, score)
+            if sprites and score > best["score"] + 1e-6:
+                best.update(score=score, step=step, code=code, grid=model.grid.copy(), palette=list(model.palette))
             user_text = (f"It ran: {res.count} voxels, {len(res.palette)} colours, bounds {model.bounds()}. The LAST picture is a contact "
                          "sheet of the model (front, left, top, back, two isometric views)"
                          + ("; the pictures before it are the references again" if ref_images else "") + ". Be a harsh critic: compare "
@@ -1007,8 +1037,22 @@ class Generator:
                              "before deciding. Next action: run an improved complete program, look closer (views include "
                              "overworld_front, overworld_back, overworld_left, overworld_right), or done only if every view matches.")
                 user_images = [png_bytes(spritecam.sheet(matches)), png_bytes(sheet(model, 1100))]
+                if best["step"] != step and best["score"] > score + 0.01:
+                    user_text += (f"\nThis run is WORSE than your best so far (step {best['step']}, match {best['score']:.2f}). Unless this "
+                                  "change is on its way to something better, go back to that program (it is in this conversation) "
+                                  "and change less at a time.")
+                elif best["step"] == step:
+                    user_text += "\nThis is your best version so far."
         if not last_code and not model.count:
             raise SeuratError("failed", "The model never produced a working program.")
+        if sprites and best["grid"] is not None and spritecam.mean_iou(spritecam.match(model, sprites, fb_pitch, side_pitch)) < best["score"] - 1e-6:
+            # what is kept is the best version, not the last one
+            model.grid, model.palette = best["grid"], best["palette"]
+            model.source = {**(model.source or {}), "program": best["code"]}
+            job.say(f"se queda la mejor versión: {'la de partida' if best['step'] == 0 else 'paso ' + str(best['step'])} "
+                    f"(coincidencia {best['score']:.2f})")
+            self._record(job, len(job.rounds), "mejor versión", {"applied": 1, "errors": [],
+                                                                  "matches": spritecam.match(model, sprites, fb_pitch, side_pitch)}, model)
         return llm_name
 
     @staticmethod

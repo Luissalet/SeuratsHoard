@@ -22,10 +22,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "review_rounds": 3,      # correction rounds after the first answer (the model sees its own result)
     "effort": "max",         # how hard the model reasons: off, low, medium, high, max (above off, rounds take minutes)
     "max_tokens": 24000,     # longest answer per round, not counting the thinking
-    "thinking_tokens": 100000,  # thinking per round before the answer is asked for (effort above off)
+    "thinking_tokens": 200000,  # thinking per round before the answer is asked for (effort above off)
     "timeout_s": 7200,       # per model call
     "auto_paint": True,      # after the model shapes the volume, paint the reference pictures onto it
-    "parallel_jobs": 2,      # generations running at the same time (read at start)
+    "parallel_jobs": 1,      # generations running at the same time (read at start); one at a time thinks faster
     "llm_url": "",           # empty: the family's model (DeepSeek on the Sparks through Hoard Link); else an OpenAI-compatible URL
     "llm_model": "",
     "voxel_mm": 2.0,         # STL: millimetres per voxel

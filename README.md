@@ -20,7 +20,9 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
     sprites' palette and pixel maps of every sprite in the prompt. Front and back sprites are drawn from about 45 degrees
     above (their horizontal axis is exactly x; Settings). After every run Seurat projects the model from each sprite's
     camera at one voxel per pixel and shows the model each sprite next to it with a silhouette diff (red missing, blue
-    extra), match scores and how its size compares; the job panel shows them per round.
+    extra), match scores and how its size compares; the job panel shows them per round. The agent is told when a run
+    is worse than its best so far and the best version is the one kept. `continue_from` carries a generation on from a
+    model's program and brief (restore the step you want first).
   - *With the language model, as a program in fixed rounds*: DeepSeek V4.1 Flash first writes a design brief from what it
     knows about the subject and your description (parts, proportions, positions in 3D, palette; pictures are only
     hints, never traced), then a Python program that builds the

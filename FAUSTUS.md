@@ -35,7 +35,10 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
   a sheet (sprite, model, red/blue diff) the agent sees and the job keeps per round (`sprite_render`, `match`, `views`).
   Models far from the sprite's size are scaled instead (`fit` auto/pixel/area). The side sprite is tried from both
   sides. `model_sprite_match` does the same for any model; `model_look` has views overworld_front/back/left/right
-  (`render.camera`: orthographic from any yaw and pitch); `model_program` takes `sprites` for the same tools.
+  (`render.camera`: orthographic from any yaw and pitch); `model_program` takes `sprites` for the same tools. The agent tracks its best
+  sprite score: a worse run is flagged in the next message and the best version (grid, palette, program) is what the
+  generation keeps. `continue_from` (model id, agent only) carries a generation on from that model's program and brief
+  without a new brief; new versions go to that model.
 - Voxel programs in fixed rounds (method `code`): first the model writes a design brief (what the subject is from its
   own knowledge and the description, parts with sizes and x/y/z positions, palette, what must read from each side;
   pictures are only hints, never traced), shown in the job and kept in `source.brief`; then it writes Python (`PALETTE` + `build(g)`, helpers ellipsoid,

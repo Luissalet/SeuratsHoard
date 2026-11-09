@@ -13,6 +13,13 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
   - *Como agente* (por defecto): tras el brief de diseño, DeepSeek trabaja en bucle como un harness agéntico: ejecuta su
     programa voxel, recibe el resultado o el error con la línea que falla, mira el modelo desde cualquier lado, corrige y
     refina, y dice cuándo ha terminado (acciones y minutos máximos en Ajustes). Cada ejecución que funciona se guarda.
+  - *Sprites del juego como objetivo* (`target: sprite`, automático con pixel art pequeño): las imágenes frontal, trasera
+    y lateral son sprites de overworld que hay que reconstruir en 3D como hacen los mods voxel (un voxel por píxel más o
+    menos, los colores y el diseño del sprite). Esos sprites están dibujados desde una cámara que mira desde arriba, así
+    que tras cada ejecución Seurat renderiza el modelo desde la misma cámara (frente y espalda a 45 grados sobre el
+    horizonte, lados a 20; ambos en Ajustes), lo lleva a la resolución del sprite y le enseña al modelo cada sprite junto
+    a su render con la diferencia de silueta (rojo falta, azul sobra) y la coincidencia; el panel del trabajo las enseña
+    por ronda.
   - *Con el modelo de lenguaje, como programa por rondas fijas*: DeepSeek V4.1 Flash escribe primero un brief de diseño con
     lo que sabe del tema y tu descripción (partes, proporciones, posición en 3D, paleta; las imágenes son solo pistas,
     nunca se calcan) y después un programa en Python que
@@ -35,8 +42,9 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
 - **Exportar**: `.vox` (MagicaVoxel 150, ida y vuelta), `.glb` (colores por vértice, mallado agrupado), `.stl` binario
   en milímetros (malla cerrada, z arriba, ajuste `voxel_mm`), PNG de cualquier vista y una tira de sprites isométricos
   desde cuatro lados. Se pueden importar `.vox` y schematics `.schem` de Minecraft (WorldEdit).
-- **Asistentes** (MCP, `mcp_server.py`, 28 herramientas): listar, crear y editar modelos con operaciones (`model_ops`),
-  verlos (`model_look` devuelve una imagen), añadir referencias, construir o generar desde imágenes, seguir y cancelar
+- **Asistentes** (MCP, `mcp_server.py`, 29 herramientas): listar, crear y editar modelos con operaciones (`model_ops`),
+  verlos (`model_look` devuelve una imagen, también desde las cámaras de overworld del juego), comparar un modelo con
+  sprites del juego desde su cámara (`model_sprite_match`), añadir referencias, construir o generar desde imágenes, seguir y cancelar
   generaciones, exportar, versiones y ajustes.
 
 ## El lenguaje de operaciones

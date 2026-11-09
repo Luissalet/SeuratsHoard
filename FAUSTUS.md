@@ -1,7 +1,7 @@
 # Seurat's Hoard — what it can and cannot do
 
-App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_server.py` (28 tools; `model_look` and
-`reference_look` return MCP images). Connector preset: its own `faustus-plugin.json`.
+App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_server.py` (29 tools; `model_look`,
+`model_sprite_match` and `reference_look` return MCP images). Connector preset: its own `faustus-plugin.json`.
 
 ## Can
 
@@ -22,6 +22,15 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
   kept: actions `run` (complete program; answer = voxel count and a contact sheet, or the error and failing line), `look`
   (large render from any side) and `done`; budgets `agent_steps` (16), `agent_minutes` (90) and `agent_step_thinking`
   (30 000 per action). Each working run is saved; the program and brief stay in the source.
+- Sprite target (`target`: auto/sprite/free; auto = sprite when the front/back/side pictures are small pixel art): the
+  sprites are the design to rebuild in 3D (grid about one voxel per sprite pixel, at least 32). The prompt explains that
+  front/back sprites are seen from `sprite_pitch` (45) degrees above and side sprites from `sprite_side_pitch` (20), and
+  after every run `spritecam.py` renders the model from those cameras (`render.camera`: orthographic from any yaw and
+  pitch, painter's order, face lighting), fits it to each sprite's subject box at the sprite's resolution and returns
+  silhouette IoU, missing/extra shares, colour difference (outline excluded) and width/height ratios, plus a sheet
+  (sprite, model, red/blue diff) that the agent sees and the job keeps per round (`sprite_render`, `match`, `views`).
+  The side sprite is tried from both sides. `model_sprite_match` does the same for any model; `model_look` has views
+  overworld_front/back/left/right.
 - Voxel programs in fixed rounds (method `code`): first the model writes a design brief (what the subject is from its
   own knowledge and the description, parts with sizes and x/y/z positions, palette, what must read from each side;
   pictures are only hints, never traced), shown in the job and kept in `source.brief`; then it writes Python (`PALETTE` + `build(g)`, helpers ellipsoid,
@@ -57,12 +66,13 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
   top or back pictures to constrain them).
 - Be quick with the default settings: with effort `max` each round takes several minutes (a four-round generation can
   take half an hour or more). Effort `off` answers in seconds but sculpts much worse.
-- Copy game sprites as exact projections: overworld sprites are drawn from above at an angle, so the side and top of
-  the model are the model's own reading of the pictures.
+- Copy game sprites as exact projections: overworld sprites are drawn from above at an angle and by hand, so even with
+  the sprite target the match is judged on silhouettes from approximate cameras (45/20 degrees by default); the parts no
+  sprite shows (underside, between the wings) are the model's own reading.
 
 ## Where things are
 
 - Data: `data/` (models/<id>/model.json and versions/, references/, renders/ with each round's sheet and raw answer,
   exports/, settings.json, mcp-token). Trash: `data/trash/`.
 - Voxel engine `voxels.py`; builders `builders.py`; pictures `images.py`; renders `render.py`; exports `exporters.py`;
-  generations `generate.py`; model client `llm.py`; UI in `static/` (three.js r170 vendored).
+  generations `generate.py`; sprite target and game cameras `spritecam.py`; model client `llm.py`; UI in `static/` (three.js r170 vendored).

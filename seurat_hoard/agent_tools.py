@@ -10,7 +10,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from . import builders
+from . import builders, spritecam
 from .errors import SeuratError
 from .exporters import FORMATS, export, from_vox, import_model
 from .hoard_link.agentkit import Empty, Tool, ann
@@ -56,7 +56,7 @@ class GetArgs(ModelId):
 
 
 class LookArgs(ModelId):
-    view: Literal[VIEWS] = Field("sheet", description="sheet (six labelled views) or one of front, back, left, right, top, bottom, iso, iso_front_left, iso_back_left, iso_back_right.")
+    view: Literal[VIEWS] = Field("sheet", description="sheet (six labelled views) or one of front, back, left, right, top, bottom, iso, iso_front_left, iso_back_left, iso_back_right, or a game overworld camera (looking down): overworld_front, overworld_back (45 degrees above), overworld_left, overworld_right (20 degrees above).")
     size: Optional[int] = Field(None, ge=1, le=64, description="Pixels per voxel (flat views) or face size (isometric).")
 
 
@@ -159,6 +159,20 @@ class GenerateArgs(BaseModel):
     method: Optional[Literal["agent", "code", "ops"]] = Field(None, description="agent (default): the model runs, looks at and fixes its voxel program in a loop until it is done; code: fixed review rounds of programs; ops: JSON operations.")
     steps: Optional[int] = Field(None, ge=2, le=60, description="agent: actions allowed (run, look, done); default from settings.")
     minutes: Optional[int] = Field(None, ge=5, le=600, description="agent: time budget; default from settings.")
+    target: Literal["auto", "sprite", "free"] = Field("auto", description="code/agent: sprite = the front/back/side pictures are game sprites to rebuild in 3D (judged from the game camera after every run); free = pictures are loose hints; auto = sprite when they are small pixel art.")
+    sprite_pitch: Optional[int] = Field(None, ge=0, le=89, description="Sprite target: degrees above the horizon of the camera of the front and back sprites; default from settings (45).")
+    sprite_side_pitch: Optional[int] = Field(None, ge=0, le=89, description="Sprite target: degrees above the horizon of the camera of the side sprites; default from settings (20).")
+
+
+class SpriteRole(BaseModel):
+    id: str
+    role: Literal["front", "back", "side"] = "front"
+
+
+class SpriteMatchArgs(ModelId):
+    references: list[SpriteRole] = Field(..., min_length=1, max_length=6, description="The game sprites (reference ids) with what they show: front (facing the camera), back (from behind) or side.")
+    sprite_pitch: Optional[int] = Field(None, ge=0, le=89, description="Degrees above the horizon of the camera of the front and back sprites; default from settings (45).")
+    sprite_side_pitch: Optional[int] = Field(None, ge=0, le=89, description="Degrees above the horizon of the camera of the side sprites; default from settings (20).")
 
 
 class JobId(BaseModel):
@@ -181,6 +195,8 @@ class SettingsArgs(BaseModel):
     agent_step_thinking: Optional[int] = Field(None, ge=0, le=200000)
     code_size: Optional[int] = Field(None, ge=8, le=128)
     program_timeout_s: Optional[int] = Field(None, ge=5, le=600)
+    sprite_pitch: Optional[int] = Field(None, ge=0, le=89, description="Sprite target: camera height (degrees) of front/back sprites.")
+    sprite_side_pitch: Optional[int] = Field(None, ge=0, le=89, description="Sprite target: camera height (degrees) of side sprites.")
     parallel_jobs: Optional[int] = Field(None, ge=1, le=6, description="Generations at the same time (after a restart).")
     llm_url: Optional[str] = Field(None, max_length=300)
     llm_model: Optional[str] = Field(None, max_length=120)
@@ -203,6 +219,19 @@ def _look(svc: Services, a: LookArgs) -> dict[str, Any]:
         raise SeuratError("invalid", "The model is empty.")
     data = png_bytes(render(m, a.view, size=a.size, background="dark" if a.view != "sheet" else "transparent"))
     return {"id": m.id, "name": m.name, "view": a.view, "count": m.count, "size": m.size, "_image": _img(data)}
+
+
+def _sprite_match(svc: Services, a: SpriteMatchArgs) -> dict[str, Any]:
+    m = svc.store.get(a.model_id)
+    if m.count == 0:
+        raise SeuratError("invalid", "The model is empty.")
+    refs = [spritecam.sprite_ref(r.role, svc.store.reference(r.id).get("name") or r.role, svc.store.reference_bytes(r.id))
+            for r in a.references]
+    fb = float(a.sprite_pitch if a.sprite_pitch is not None else svc.settings["sprite_pitch"])
+    side = float(a.sprite_side_pitch if a.sprite_side_pitch is not None else svc.settings["sprite_side_pitch"])
+    matches = spritecam.match(m, refs, fb, side)
+    return {"id": m.id, "name": m.name, "match": round(spritecam.mean_iou(matches), 3), "views": [v.to_dict() for v in matches],
+            "summary": [v.summary() for v in matches], "_image": _img(png_bytes(spritecam.sheet(matches)))}
 
 
 def _palette(svc: Services, a: PaletteArgs) -> dict[str, Any]:
@@ -351,6 +380,12 @@ TOOLS: list[Tool] = [
          GetArgs, ann(read_only=True), lambda s, a: _summary(s, a.model_id, a.voxels)),
     Tool("model_look", _d("See a model: returns a picture (sheet = six labelled views, or one view).", synonyms="ver modelo, render"),
          LookArgs, ann(read_only=True), _look, timeout_s=60, capped=False),
+    Tool("model_sprite_match", _d("Compare a model with game sprites seen from the game camera: each sprite next to the model "
+                                  "rendered from the same camera (front/back from well above, side nearly in profile) at the "
+                                  "sprite's resolution, the silhouette diff and match scores (1 = identical).",
+                                  "Use it to judge a voxel rebuild of overworld sprites; the agent generation does it after every run.",
+                                  "comparar con sprites, coincidencia sprite"),
+         SpriteMatchArgs, ann(read_only=True), _sprite_match, timeout_s=120, capped=False),
     Tool("model_program", _d("Build a model by running a voxel program (Python with numpy: PALETTE + build(g)) in a sandbox: "
                              "no files, no network, a time limit. The program is kept with the model.",
                              "Helpers: ellipsoid, sphere, capsule (tapered tube), box, polygon (flat shape with thickness), mirror_x, shade_by_height; numpy masks over xs, ys, zs.",

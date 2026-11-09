@@ -1,7 +1,8 @@
 # Objetivos de Seurat's Hoard
 
-- Conector de Faustus: llevar `faustus-plugin.json` a la copia de manifiestos de Faustus para que sus agentes usen las
-  27 herramientas sin configurarlo a mano.
+- Calibrar la cámara de cada hoja de sprites: buscar sola los grados que mejor encajan (con un modelo de referencia o
+  ajustando a la vez cámara y modelo) en lugar de los 45/20 fijos.
+- Sprites de cuatro direcciones y de caminar: usar los fotogramas de andar como poses extra del mismo modelo.
 - Escenas por partes: que el modelo planifique una escena grande en objetos y construya cada uno en su propio programa,
   componiendo el resultado (más allá de 128 de lado).
 - Render con luz de verdad para las revisiones (sombras y oclusión como el editor three.js) en lugar del isométrico por

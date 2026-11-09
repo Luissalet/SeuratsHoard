@@ -326,3 +326,48 @@ def test_agent_generation_runs_looks_and_stops(tmp_path):
         assert any(m["role"] == "assistant" and "ellipsoid" in str(m["content"]) for m in hist)   # its own code is remembered
         model = c.get(f"/api/models/{st['model_id']}").json()
         assert model["count"] > 50 and model["source"]["method"] == "agent" and "ellipsoid" in model["source"]["program"]
+
+
+def test_sprite_target_judges_runs_from_the_game_camera(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from seurat_hoard.config import Config
+    from seurat_hoard.main import create_app
+    from seurat_hoard.services import Services
+
+    cfg = Config(data_dir=tmp_path / "data", port=5250, data_dir_configured=True, background=False)
+    link = AgentLink()
+    svc = Services(cfg, link_factory=lambda: link)
+    with TestClient(create_app(cfg, services=svc), base_url="http://127.0.0.1:5250", client=("127.0.0.1", 50000)) as c:
+        ids = {}
+        for role in ("front", "back", "side"):
+            ids[role] = c.post(f"/api/references?name={role}", content=sprite_png(),
+                               headers={"Content-Type": "image/png"}).json()["id"]
+        job = c.post("/api/generate", json={"references": [{"id": i, "role": r} for r, i in ids.items()], "method": "agent",
+                                            "steps": 8, "prompt": "the sprite in 3D"}).json()
+        st = c.get(f"/api/jobs/{job['job_id']}").json()
+        assert st["status"] == "done", st
+        assert st["target"] == "sprite" and 0 < st["match"] <= 1
+        system = link.calls[0]["messages"][0]["content"]
+        assert "SPRITE TARGET" in system and "45 degrees" in system and "20 degrees" in system
+        assert len(link.calls[0]["images"]) == 1                      # the labelled sprite board
+        after_run = link.calls[2]["messages"][-1]["content"]
+        text = after_run[0]["text"] if isinstance(after_run, list) else after_run
+        assert "silhouette match" in text and "FRONT sprite" in text and "SIDE sprite" in text
+        assert len(link.calls[2]["images"]) == 2                      # sprite comparison + contact sheet
+        good = [r for r in st["rounds"] if r.get("sprite_render")]
+        assert good and len(good[0]["views"]) == 3 and (cfg.data_dir / "renders" / good[0]["sprite_render"]).exists()
+        model = c.get(f"/api/models/{st['model_id']}").json()
+        assert model["size"][0] >= 32                                  # about one voxel per sprite pixel, at least 32
+        # the same check as a tool
+        head = {"Authorization": "Bearer " + svc.token}
+        res = c.post("/api/agent/call", json={"name": "model_sprite_match", "arguments": {
+            "model_id": st["model_id"], "references": [{"id": ids["front"], "role": "front"}, {"id": ids["side"], "role": "side"}]}},
+            headers=head).json()
+        assert len(res["views"]) == 2 and res["_image"]["mime"] == "image/png" and "silhouette match" in res["summary"][0]
+        look = c.post("/api/agent/call", json={"name": "model_look", "arguments": {"model_id": st["model_id"], "view": "overworld_back"}},
+                      headers=head).json()
+        assert look["_image"]["mime"] == "image/png"
+        free = c.post("/api/generate", json={"references": [{"id": ids["front"], "role": "front"}], "method": "agent", "steps": 4,
+                                             "target": "free"}).json()
+        assert c.get(f"/api/jobs/{free['job_id']}").json()["target"] == "free"

@@ -477,3 +477,30 @@ def test_sprite_builder_keeps_the_outline_off_the_sides():
     mid = m.grid[1, 5].nonzero()[0]
     if len(mid) > 2:
         assert pal[m.grid[1, 5, mid[len(mid) // 2]] - 1] != "#000000"     # but not inside the side wall
+
+
+def test_camera_render_and_sprite_match():
+    from seurat_hoard import spritecam
+    from seurat_hoard.render import camera, camera_basis
+
+    c, r, u = camera_basis(0, 0)
+    assert np.allclose(c, [0, 0, 1]) and np.allclose(r, [1, 0, 0]) and np.allclose(u, [0, 1, 0])
+    c, r, u = camera_basis(-90, 30)
+    assert c[0] < 0 and c[1] > 0 and r[2] > 0.99          # from the left the face (+z) is on the right
+    m = VoxelModel.empty("t", "t", [16, 16, 16], ["#ff0000", "#00ff00"])
+    m.grid[4:12, 0:8, 4:12] = 1
+    m.grid[4:12, 8:10, 4:12] = 2
+    top = np.asarray(camera(m, 0, 80, 4))
+    side = np.asarray(camera(m, 0, 0, 4))
+    green = lambda a: ((a[..., 1] > 100) & (a[..., 0] < 80) & (a[..., 3] > 0)).sum()
+    assert green(top) > green(side)                        # from above the green lid fills the picture
+    # a sprite made from the model's own camera view matches it best
+    img = camera(m, 0, 45, 1)
+    buf = io.BytesIO(); img.save(buf, "PNG")
+    ref = spritecam.sprite_ref("front", "self", buf.getvalue())
+    good = spritecam.match_view(m, ref, 0, 45)
+    other = VoxelModel.empty("o", "o", [16, 16, 16], ["#ff0000"])
+    other.grid[7:9, 0:15, 7:9] = 1
+    bad = spritecam.match_view(other, ref, 0, 45)
+    assert good.iou > 0.8 > bad.iou and "silhouette match" in good.summary()
+    assert spritecam.sheet([good, bad]).width > 100 and spritecam.colours([ref])

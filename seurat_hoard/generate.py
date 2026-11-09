@@ -28,7 +28,8 @@ import numpy as np
 from . import builders
 from .errors import SeuratError
 from .hoard_link.ids import new_id
-from .images import Indexed, index_picture, to_png
+from . import spritecam
+from .images import Indexed, index_picture, is_sprite, to_png
 from .llm import ModelClient, parse_json
 from .program import ProgramError, run_program
 from .palette import DEFAULT_PALETTE, merge
@@ -197,6 +198,33 @@ AGENT_SYSTEM = CODE_SYSTEM.split("ANSWER: ONE JSON object")[0] + """YOU WORK IN 
 Run early (a first complete version), then look at it critically from several sides, fix what is wrong and refine the
 details, run again, and so on. Errors are normal: read the failing line and fix it. Every run is the whole program."""
 
+SPRITE_TARGET = """
+SPRITE TARGET (this overrides what is said above about pictures). The pictures marked FRONT, BACK and SIDE are the
+subject's small pixel-art game sprites, and THEY ARE THE TARGET: build the 3D voxel version of exactly that sprite
+design, the way voxel mods rebuild handheld-game overworld sprites in 3D: chunky, about one voxel per sprite pixel, the
+sprite's own flat colours, its proportions, its pose and its markings; not a realistic or different design.
+The sprites are NOT flat views. The game camera looks down on the world:
+- the FRONT sprite shows the subject facing the camera, seen from about {fb} degrees above the horizon;
+- the BACK sprite shows it from behind, from the same height;
+- the SIDE sprite is seen from about {side} degrees above, nearly in profile.
+So in the front and back sprites the vertical axis of the picture mixes height and depth: a part lower in the picture can
+be NEARER the camera rather than lower in the world (seen from behind and above, a bird's tail fan lands at the bottom
+because it is the nearest part; wings spread flat show their whole top surface). Reason in 3D: for each part decide its
+x, y AND z so that from each of those cameras it lands where the sprite has it, and the side sprite fixes the depth.
+Leave the black outline out (it is how sprites draw edges); dark outline pixels inside the shape mark where parts
+separate. Use the sprite's colours (listed below), with at most one lighter and one darker shade of each.
+After every run Seurat shows each sprite next to your model seen from the SAME camera at the sprite's resolution, and a
+silhouette diff (red: in the sprite but missing in your model; blue: your model has it but the sprite does not), with
+match scores. Drive them up: silhouette match 0.85 or better on every view, the colours in the right places. The
+contact sheet after it shows the model from the usual flat and isometric views, to check it in 3D."""
+
+SPRITE_BRIEF = """
+THE PICTURES ARE THE TARGET: they are game sprites of the subject (front, back, side) drawn from a camera above the
+world ({fb} degrees for front and back, {side} degrees for the side). The brief must describe the 3D model that, seen
+from those cameras, looks like those sprites: the sprite's design, proportions, pose and colours, one voxel per sprite
+pixel or so. Work out where every part is in x, y and z from the three sprites together: in the front and back sprites
+lower in the picture can mean nearer the camera. Ignore the black outline."""
+
 CODE_REVIEW = """Round {round} of {rounds}. Your previous program (below) built the model in the LAST picture: a contact
 sheet with flat views (front, left, top, back) and two isometric views. The other pictures are the references.
 Current model: grid {size}, {count} voxels, bounds {bounds}.
@@ -229,6 +257,8 @@ class Job:
     error: str = ""
     warning: str = ""                       # the model failed part-way; what was built before is saved
     brief: str = ""                         # code method: the design brief written before the program
+    sprites: list = field(default_factory=list)   # sprite target: spritecam.SpriteRef of the front/back/side sprites
+    match: float = 0.0                      # sprite target: best mean silhouette match so far
     created: float = field(default_factory=time.time)
     finished: float = 0.0
     cancel: threading.Event = field(default_factory=threading.Event)
@@ -241,6 +271,7 @@ class Job:
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "status": self.status, "step": self.step, "log": self.log[-80:], "rounds": self.rounds,
                 "model_id": self.model_id, "model_name": self.model_name, "llm": self.llm, "error": self.error, "warning": self.warning, "brief": self.brief, "answers": self.answers,
+                "target": "sprite" if self.sprites else ("free" if self.status != "queued" else self.params.get("target") or "auto"), "match": round(self.match, 3),
                 "created": self.created, "finished": self.finished,
                 "params": {k: v for k, v in self.params.items() if k != "images"}}
 
@@ -372,6 +403,17 @@ class Generator:
         front = refs["front"][0][1] if refs else None
         side = refs.get("side", [(None, None, None)])[0][1]
         top = refs.get("top", [(None, None, None)])[0][1]
+        target = p.get("target") or "auto"
+        if target not in ("auto", "sprite", "free"):
+            raise SeuratError("invalid", "target must be auto, sprite or free.")
+        job.sprites = []
+        if target != "free":
+            for r in p["references"]:
+                role = r.get("role") or "front"
+                if role in ("front", "back", "side"):
+                    raw = self.svc.store.reference_bytes(r["id"])
+                    if target == "sprite" or is_sprite(raw):
+                        job.sprites.append(spritecam.sprite_ref(role, self.svc.store.reference(r["id"]).get("name") or role, raw))
 
         # ---- palette: the reference colours, a darker shade of each, a few greys
         palette: list[str] = []
@@ -415,6 +457,10 @@ class Generator:
                 start = "empty"
             if start == "empty" and method in ("code", "agent"):
                 side_n = int(settings["code_size"])
+                if job.sprites and method == "agent":
+                    # about one voxel per sprite pixel, like the voxel mods
+                    longest = max(max(sp.rgba.shape[:2]) for sp in job.sprites)
+                    side_n = min(MAX_SIDE, max(32, -(-(longest + 4) // 8) * 8))
                 size = [min(MAX_SIDE, max(8, int(v))) for v in (p.get("size") or [side_n, side_n, side_n])]
                 model = VoxelModel.empty("tmp", name, size, palette)
             elif start == "empty" and front is None:
@@ -498,8 +544,15 @@ class Generator:
         path.parent.mkdir(parents=True, exist_ok=True)
         if model.count:
             path.write_bytes(png_bytes(sheet(model, 900)))
+        matches = result.get("matches") or []
+        sprite_name = ""
+        if matches:
+            sprite_name = f"{job.id}-r{rnd}-sprites.png"
+            (self.svc.config.renders_dir / sprite_name).write_bytes(png_bytes(spritecam.sheet(matches)))
         job.rounds.append({"round": rnd, "notes": notes, "applied": result.get("applied", 0), "errors": result.get("errors", [])[:12],
-                           "count": model.count, "size": model.size, "render": name if model.count else ""})
+                           "count": model.count, "size": model.size, "render": name if model.count else "",
+                           **({"sprite_render": sprite_name, "match": round(spritecam.mean_iou(matches), 3),
+                               "views": [m.to_dict() for m in matches]} if matches else {})})
 
     # ------------------------------------------------------------------ the model's part
     def _model_rounds(self, job: Job, model: VoxelModel, refs: dict, rounds: int, start: str, p: dict[str, Any]) -> str:
@@ -733,14 +786,14 @@ class Generator:
         return llm_name
 
     def _write_brief(self, job: Job, client: ModelClient, lines: list[str], ref_images: list[bytes], effort, max_tokens: int,
-                     thinking_tokens: int, timeout: float) -> tuple[str, str, bool]:
+                     thinking_tokens: int, timeout: float, extra: str = "") -> tuple[str, str, bool]:
         """The design brief: the model understands the subject in writing before any code."""
         job.say("el modelo piensa el encargo y escribe el brief de diseño")
 
         def brief_progress(n_text: int, n_reason: int) -> None:
             job.step = "brief de diseño · " + (f"pensando: {n_reason} tokens" if n_reason and not n_text else f"escribiendo: {n_text} tokens")
 
-        b_answer = client.chat(BRIEF_SYSTEM, "\n".join(lines), list(ref_images), max_tokens=max_tokens, effort=effort,
+        b_answer = client.chat(BRIEF_SYSTEM + extra, "\n".join(lines), list(ref_images), max_tokens=max_tokens, effort=effort,
                                timeout=timeout, on_progress=brief_progress, cancel=job.cancel, thinking_tokens=thinking_tokens)
         if b_answer.finish == "cancelled":
             return "", b_answer.model or "", True
@@ -776,6 +829,16 @@ class Generator:
         max_steps = int(p.get("steps") or settings["agent_steps"])
         deadline = time.time() + 60 * float(p.get("minutes") or settings["agent_minutes"])
         ref_images = [img for role in ROLES for _, _, img in refs.get(role, [])][:4]
+        sprites = job.sprites
+        fb_pitch = float(p.get("sprite_pitch") if p.get("sprite_pitch") is not None else settings["sprite_pitch"])
+        side_pitch = float(p.get("sprite_side_pitch") if p.get("sprite_side_pitch") is not None else settings["sprite_side_pitch"])
+        system, brief_extra = AGENT_SYSTEM, ""
+        if sprites:
+            system = AGENT_SYSTEM + SPRITE_TARGET.format(fb=int(fb_pitch), side=int(side_pitch))
+            brief_extra = SPRITE_BRIEF.format(fb=int(fb_pitch), side=int(side_pitch))
+            # the sprites at a size the model can read, labelled, then any other picture
+            others = [img for role in ROLES if role not in ("front", "back", "side") for _, _, img in refs.get(role, [])]
+            ref_images = [png_bytes(spritecam.board(sprites, fb_pitch, side_pitch))] + others[:2]
         sx, sy, sz = model.size
         lines = [f"Build a voxel model in a grid of size X={sx}, Y={sy}, Z={sz}."]
         if p.get("prompt"):
@@ -783,11 +846,17 @@ class Generator:
         for role in ROLES:
             for meta, ix, _ in refs.get(role, []):
                 lines.append(f"Reference picture '{meta.get('name')}' ({role}, {meta.get('width')}x{meta.get('height')} px).")
-        if ref_colors:
+        if sprites:
+            for sp in sprites:
+                h, w = sp.rgba.shape[:2]
+                lines.append(f"{sp.role.upper()} sprite '{sp.name}': {w}x{h} pixels at its real size.")
+            lines.append("Sprite colours (use these): " + ", ".join(spritecam.colours(sprites)))
+        elif ref_colors:
             lines.append("Colours seen in the pictures (hints only): " + ", ".join(ref_colors[:24]))
         if not refs:
             lines.append("There are no pictures: build it from the description.")
-        brief, llm_name, cancelled = self._write_brief(job, client, lines, ref_images, effort, max_tokens, thinking_tokens, timeout)
+        brief, llm_name, cancelled = self._write_brief(job, client, lines, ref_images, effort, max_tokens, thinking_tokens, timeout,
+                                                       extra=brief_extra)
         if cancelled:
             return llm_name
         if brief:
@@ -812,7 +881,7 @@ class Generator:
                                             f"escribiendo: {n_text} tokens" + (f" (tras pensar {n_reason})" if n_reason else ""))
 
             job.say(label + ": el modelo decide")
-            answer = client.chat(AGENT_SYSTEM, user_text, user_images, max_tokens=max_tokens, effort=effort, timeout=timeout,
+            answer = client.chat(system, user_text, user_images, max_tokens=max_tokens, effort=effort, timeout=timeout,
                                  on_progress=progress, cancel=job.cancel, thinking_tokens=step_thinking, history=history)
             llm_name = answer.model or llm_name
             if answer.finish == "cancelled":
@@ -841,7 +910,8 @@ class Generator:
                 continue
             if action == "look":
                 view = str(data.get("view") or "iso")
-                view = view if view in ("iso", "iso_front_left", "iso_back_left", "iso_back_right", "front", "back", "left", "right", "top", "bottom") else "iso"
+                view = view if view in ("iso", "iso_front_left", "iso_back_left", "iso_back_right", "front", "back", "left", "right", "top", "bottom",
+                                        "overworld_front", "overworld_back", "overworld_left", "overworld_right") else "iso"
                 if not model.count:
                     user_text, user_images = "There is no model yet: run a program first.", []
                     continue
@@ -873,12 +943,17 @@ class Generator:
             model.source = {**(model.source or {}), "program": code}
             last_code = code
             job.say(f"{label}: {res.count} voxels, {len(res.palette)} colores")
-            self._record(job, step, notes, {"applied": 1, "errors": []}, model)
+            matches = spritecam.match(model, sprites, fb_pitch, side_pitch) if sprites else []
+            score = spritecam.mean_iou(matches)
+            self._record(job, step, notes, {"applied": 1, "errors": [], "matches": matches}, model)
+            if sprites:
+                job.say(f"{label}: coincidencia con los sprites {score:.2f} (" + ", ".join(f"{m.role} {m.iou:.2f}" for m in matches) + ")")
             if model.id and model.id != "tmp" and not p.get("into"):
                 model.source = {**model.source, "kind": "generated", "method": "agent", "job": job.id, "brief": job.brief,
                                 "prompt": p.get("prompt") or "", "partial": True}
-                self.svc.store.save(model, version_note=f"generation {job.id} step {step}")
+                self.svc.store.save(model, version_note=f"generation {job.id} step {step}" + (f" (sprite match {score:.2f})" if sprites else ""))
                 job.model_id, job.model_name = model.id, model.name
+            job.match = max(job.match, score)
             user_text = (f"It ran: {res.count} voxels, {len(res.palette)} colours, bounds {model.bounds()}. The LAST picture is a contact "
                          "sheet of the model (front, left, top, back, two isometric views)"
                          + ("; the pictures before it are the references again" if ref_images else "") + ". Be a harsh critic: compare "
@@ -886,6 +961,16 @@ class Generator:
                          "it recognisable) and list what is wrong before deciding. Next action: run an improved complete program, look "
                          "closer from a side, or done only if it is truly excellent.")
             user_images = list(ref_images) + [png_bytes(sheet(model, 1100))]
+            if sprites:
+                user_text = (f"It ran: {res.count} voxels, {len(res.palette)} colours, bounds {model.bounds()}. Mean silhouette match "
+                             f"{score:.2f}.\n" + "\n".join(m.summary() for m in matches) + "\nThe FIRST picture puts each sprite next to "
+                             "your model seen from the same camera and the silhouette diff (red missing, blue extra); the SECOND is a "
+                             "contact sheet of the model (front, left, top, back, two isometric views). Be a harsh critic: go through "
+                             "each view, find which part of your model makes each red and blue area (remember the camera looks down: "
+                             "lower in the front/back picture can mean nearer), and how the colours differ, and list what is wrong "
+                             "before deciding. Next action: run an improved complete program, look closer (views include "
+                             "overworld_front, overworld_back, overworld_left, overworld_right), or done only if every view matches.")
+                user_images = [png_bytes(spritecam.sheet(matches)), png_bytes(sheet(model, 1100))]
         if not last_code and not model.count:
             raise SeuratError("failed", "The model never produced a working program.")
         return llm_name

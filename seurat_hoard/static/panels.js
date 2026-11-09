@@ -589,8 +589,8 @@ function initGlobalDrop() {
     e.preventDefault();
     depth = 0; veil.hidden = true;
     const files = [...e.dataTransfer.files];
-    const vox = files.filter((f) => /\.vox$/i.test(f.name));
-    const pics = files.filter((f) => !/\.vox$/i.test(f.name));
+    const vox = files.filter((f) => /\.(vox|schem)$/i.test(f.name));
+    const pics = files.filter((f) => !/\.(vox|schem)$/i.test(f.name));
     for (const f of vox) await ctx.importVox(f);
     if (pics.length) { ctx.showTab('refs'); await uploadReferences(pics); }
   });

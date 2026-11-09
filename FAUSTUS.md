@@ -14,7 +14,10 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
   editing, iso/front/side/back/top views, drag-and-drop of pictures and .vox files.
 - Read reference pictures (PNG, JPG, GIF, WebP, BMP): crop, flat background to transparent, pixel-art scale undone,
   reduced to a size and a number of colours (`reference_grid`).
-- Instant models from pictures: inflate, extrude, hull (front + side + optional top).
+- Instant models from pictures: sprite 3D (picture on front and back, gentle rounded thickness, dark outline kept off the
+  sides), inflate, extrude, hull (front + side + optional top).
+- Import Minecraft schematics (`.schem`, WorldEdit/Sponge v1-3): blocks become their texture colours (table + rules for
+  the dyed families); a web page saved as .schem is recognised and explained.
 - Agent generations (default method `agent`): after the design brief the model works in a tool loop with the conversation
   kept: actions `run` (complete program; answer = voxel count and a contact sheet, or the error and failing line), `look`
   (large render from any side) and `done`; budgets `agent_steps` (16), `agent_minutes` (90) and `agent_step_thinking`

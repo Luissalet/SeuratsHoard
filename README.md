@@ -6,7 +6,8 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
 - **Editor** (browser or Hoard window, port 5250): add, erase, paint, fill, eyedropper and box tools, X/Z symmetry, a
   layer slicer to work inside the model, undo/redo, palette editing, autosave with versions you can restore.
 - **Pictures to voxels**
-  - *Instant* (no model): *inflate* (the front puffed up like a cushion), *extrude* (a slab) or *silhouette* (front +
+  - *Instant* (no model): *sprite 3D* (the sprite as a voxel diorama piece, like the sprite-to-voxel game mods: the
+    picture on front and back, a gentle rounded thickness, the 2D outline kept off the sides), *inflate* (the front puffed up like a cushion), *extrude* (a slab) or *silhouette* (front +
     side views carved into a block, coloured from each view).
   - *As an agent* (default): after the design brief, DeepSeek works in a loop like an agent harness: it runs its voxel
     program, gets the result or the error with the failing line, looks at the model from any side, fixes and refines,
@@ -30,7 +31,7 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
   - Pixel art enlarged by an integer factor is read at its real size; a flat background colour becomes transparent.
 - **Exports**: `.vox` (MagicaVoxel 150, round trip), `.glb` (vertex colours, greedy-meshed), binary `.stl` in millimetres
   (closed mesh, z up, setting `voxel_mm`), PNG of any view, and an isometric sprite strip from four sides. `.vox` files
-  can be imported.
+  and Minecraft `.schem` schematics (WorldEdit) can be imported.
 - **Assistants** (MCP, `mcp_server.py`, 28 tools): list/create/edit models with operations (`model_ops`), look at them
   (`model_look` returns a picture), add references, build or generate from pictures, follow and cancel generations,
   export, versions, settings.

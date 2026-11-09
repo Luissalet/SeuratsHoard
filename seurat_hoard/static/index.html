@@ -25,9 +25,9 @@
       <button class="btn small" id="btn-dup" title="Hacer una copia del modelo">Duplicar</button>
       <button class="btn small" id="btn-rename" title="Cambiar el nombre">Renombrar</button>
       <button class="btn small" id="btn-versions" title="Versiones anteriores">Versiones</button>
-      <button class="btn small" id="btn-import" title="Abrir un archivo de MagicaVoxel">Importar .vox</button>
+      <button class="btn small" id="btn-import" title="Abrir un .vox de MagicaVoxel o un .schem de Minecraft (WorldEdit)">Importar .vox / .schem</button>
       <button class="btn small danger" id="btn-delete" title="Mover a la papelera">Borrar</button>
-      <input type="file" id="file-vox" accept=".vox" hidden>
+      <input type="file" id="file-vox" accept=".vox,.schem" hidden>
     </div>
 
     <div class="save-state" id="save-state" data-state="saved"><span class="dot"></span><span id="save-text">Guardado</span></div>
@@ -162,6 +162,7 @@
 
         <div class="quick">
           <span class="quick-label">Rápido, sin modelo:</span>
+          <button class="btn small" data-build="sprite" title="El sprite como pieza de diorama voxel: la imagen delante y detrás, con grosor redondeado y sin el contorno negro en los lados">Sprite 3D</button>
           <button class="btn small" data-build="inflate" title="Hincha la imagen de frente">Inflar</button>
           <button class="btn small" data-build="extrude" title="La imagen con grosor">Extruir</button>
           <button class="btn small" data-build="hull" title="Cruza la silueta de frente con la de lado">Silueta</button>
@@ -266,7 +267,7 @@
   </footer>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
-  <div class="dropveil" id="dropveil" hidden><div>Suelta para subir las imágenes<br><small>(.vox para importar un modelo)</small></div></div>
+  <div class="dropveil" id="dropveil" hidden><div>Suelta para subir las imágenes<br><small>(.vox o .schem para importar un modelo)</small></div></div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

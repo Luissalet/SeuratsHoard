@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from ..agent_tools import TOOLS_BY_NAME, export_model
 from ..errors import SeuratError
-from ..exporters import FORMATS, from_vox
+from ..exporters import FORMATS, from_vox, import_model
 from ..images import index_picture, thumbnail_png
 from ..render import png_bytes, render
 from .deps import services, tool
@@ -132,12 +132,12 @@ def export_file(request: Request, model_id: str, fmt: str, view: str = "iso", si
     return _file(data, filename, FORMATS[fmt], download)
 
 
+@router.post("/api/models/import")
 @router.post("/api/models/import-vox")
 async def import_vox(request: Request, name: str = "modelo importado"):
     svc = services(request)
     data = await request.body()
-    m = from_vox(data, svc.store.new_id(), name[:120])
-    m.source = {"kind": "imported"}
+    m = import_model(data, svc.store.new_id(), name[:120])
     svc.store.save(m)
     return m.to_dict(voxels=False)
 

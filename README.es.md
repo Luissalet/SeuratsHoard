@@ -7,7 +7,8 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
   corte por capas para trabajar por dentro, deshacer/rehacer, edición de la paleta y guardado automático con versiones
   que puedes recuperar.
 - **De imagen a voxels**
-  - *Rápido* (sin modelo): *inflar* (el frente abombado como un cojín), *extruir* (una losa) o *silueta* (vistas de
+  - *Rápido* (sin modelo): *sprite 3D* (el sprite como pieza de diorama voxel, como los mods que pasan sprites a voxel:
+    la imagen delante y detrás, un grosor redondeado suave y el contorno 2D fuera de los lados), *inflar* (el frente abombado como un cojín), *extruir* (una losa) o *silueta* (vistas de
     frente y lado talladas en un bloque, coloreadas desde cada vista).
   - *Como agente* (por defecto): tras el brief de diseño, DeepSeek trabaja en bucle como un harness agéntico: ejecuta su
     programa voxel, recibe el resultado o el error con la línea que falla, mira el modelo desde cualquier lado, corrige y
@@ -33,7 +34,7 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
   - El pixel art ampliado por un factor entero se lee a su tamaño real; un fondo de un solo color pasa a transparente.
 - **Exportar**: `.vox` (MagicaVoxel 150, ida y vuelta), `.glb` (colores por vértice, mallado agrupado), `.stl` binario
   en milímetros (malla cerrada, z arriba, ajuste `voxel_mm`), PNG de cualquier vista y una tira de sprites isométricos
-  desde cuatro lados. Los `.vox` se pueden importar.
+  desde cuatro lados. Se pueden importar `.vox` y schematics `.schem` de Minecraft (WorldEdit).
 - **Asistentes** (MCP, `mcp_server.py`, 28 herramientas): listar, crear y editar modelos con operaciones (`model_ops`),
   verlos (`model_look` devuelve una imagen), añadir referencias, construir o generar desde imágenes, seguir y cancelar
   generaciones, exportar, versiones y ajustes.

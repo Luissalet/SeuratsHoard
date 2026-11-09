@@ -17,7 +17,7 @@ from .images import Indexed
 from .palette import merge
 from .voxels import MAX_SIDE, VoxelModel, distance_inside
 
-MODES = ("extrude", "inflate", "hull")
+MODES = ("sprite", "extrude", "inflate", "hull")
 
 
 def _distance_inside(mask: np.ndarray) -> np.ndarray:
@@ -51,6 +51,8 @@ def build(mode: str, front: Indexed, *, side: Optional[Indexed] = None, top: Opt
         for z in range(d):
             model.grid[:, :, z] = np.flipud(fgrid).T
         return model
+    if mode == "sprite":
+        return _sprite(front, fgrid, mask, palette, depth, model_id, name)
     # inflate
     dist = _distance_inside(mask)
     dmax = max(1, int(dist.max()))
@@ -121,4 +123,56 @@ def _hull(front: Indexed, side: Indexed, top: Optional[Indexed], palette: list[s
     zz = zi[xx, yy]
     colour[xx, yy, zz] = fgrid.T[xx, yy]
     model.grid = np.where(occ, colour, 0).astype(np.uint8)
+    return model
+
+
+def _sprite(front: Indexed, fgrid: np.ndarray, mask: np.ndarray, palette: list[str], depth: int, model_id: str,
+            name: str) -> VoxelModel:
+    """The sprite as a voxel diorama piece (the look of sprite-to-voxel game mods): the picture on the front and the
+    back, a gentle rounded thickness, and the dark 2D outline kept only on those two faces, so the sides take the colour
+    of the part next to them instead of a black wall."""
+    h, w = fgrid.shape
+    rgb = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in palette] or [[0, 0, 0]], dtype=np.float64)
+    luma = np.zeros(len(palette) + 1)
+    if len(palette):
+        luma[1:] = rgb @ np.array([0.299, 0.587, 0.114])
+    dark = mask & (luma[fgrid] < 55)
+    # outline = dark pixels touching the empty background or other outline pixels on the silhouette
+    pad = np.pad(mask, 1)
+    edge = mask & ~(pad[:-2, 1:-1] & pad[2:, 1:-1] & pad[1:-1, :-2] & pad[1:-1, 2:])
+    outline = dark & (edge | (np.pad(dark, 1)[:-2, 1:-1] | np.pad(dark, 1)[2:, 1:-1]))
+    # the colour each outline pixel shows on the sides: its nearest non-outline neighbour, darkened
+    inner = mask & ~outline
+    side_c = fgrid.copy()
+    ys, xs = np.nonzero(outline)
+    iy, ix = np.nonzero(inner)
+    shade: dict[int, int] = {}
+    if len(iy):
+        for y, x in zip(ys, xs):
+            k = int(np.argmin((iy - y) ** 2 + (ix - x) ** 2))
+            c = int(fgrid[iy[k], ix[k]])
+            if c not in shade:
+                r, g, b = (rgb[c - 1] * 0.7).astype(int)
+                hexc = "#%02x%02x%02x" % (r, g, b)
+                if hexc not in palette and len(palette) < 255:
+                    palette.append(hexc)
+                shade[c] = palette.index(hexc) + 1 if hexc in palette else c
+            side_c[y, x] = shade[c]
+    dist = _distance_inside(mask)
+    dmax = max(1, float(dist.max()))
+    half_max = max(1, int(depth // 2) if depth else max(2, round(min(h, w) * 0.06)))
+    t = dist / dmax
+    half = np.where(mask, np.rint(half_max * np.sqrt(np.clip(1 - (1 - t) ** 2, 0, 1))), -1).astype(np.int64)
+    d = 2 * half_max + 1
+    model = VoxelModel.empty(model_id, name, [w, h, d], palette)
+    zc = half_max
+    flipped, fside, fhalf = np.flipud(fgrid), np.flipud(side_c), np.flipud(half)
+    for y in range(h):
+        for x in range(w):
+            k = fhalf[y, x]
+            if k < 0:
+                continue
+            model.grid[x, y, zc - k: zc + k + 1] = fside[y, x]
+            model.grid[x, y, zc + k] = flipped[y, x]          # the picture on the front face
+            model.grid[x, y, zc - k] = flipped[y, x]          # and on the back
     return model

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from . import builders
 from .errors import SeuratError
-from .exporters import FORMATS, export, from_vox
+from .exporters import FORMATS, export, from_vox, import_model
 from .hoard_link.agentkit import Empty, Tool, ann
 from .hoard_link.agentkit import call_tool as _call_tool
 from .hoard_link.agentkit import tool_catalog as _catalog
@@ -103,7 +103,7 @@ class ExportArgs(ModelId):
 
 
 class ImportArgs(BaseModel):
-    path: str = Field(..., min_length=1, max_length=500, description="A MagicaVoxel .vox file on this PC.")
+    path: str = Field(..., min_length=1, max_length=500, description="A MagicaVoxel .vox or Minecraft .schem (WorldEdit/Sponge) file on this PC.")
     name: str = Field("", max_length=120)
 
 
@@ -128,7 +128,7 @@ class RefDeleteArgs(RefId):
 
 class BuildArgs(BaseModel):
     reference_id: str = Field(..., description="Front view.")
-    mode: Literal["inflate", "extrude", "hull"] = "inflate"
+    mode: Literal["sprite", "inflate", "extrude", "hull"] = Field("sprite", description="sprite: the picture on front and back with a gentle rounded thickness and the 2D outline kept off the sides (sprite-to-voxel game mod look); inflate: puffed up; extrude: a slab; hull: front + side silhouettes.")
     side_id: str = Field("", description="hull: the side view (the model seen from its left).")
     top_id: str = Field("", description="hull: optional top view.")
     depth: int = Field(0, ge=0, le=256, description="inflate/extrude thickness; 0 = automatic.")
@@ -254,8 +254,8 @@ def _import(svc: Services, a: ImportArgs) -> dict[str, Any]:
     path = Path(a.path).expanduser()
     if not path.is_file():
         raise SeuratError("not_found", f"No file {a.path}.")
-    m = from_vox(path.read_bytes(), svc.store.new_id(), a.name or path.stem)
-    m.source = {"kind": "imported", "file": path.name}
+    m = import_model(path.read_bytes(), svc.store.new_id(), a.name or path.stem)
+    m.source = {**(m.source or {}), "file": path.name}
     svc.store.save(m)
     return {"id": m.id, "name": m.name, "size": m.size, "count": m.count}
 
@@ -375,7 +375,8 @@ TOOLS: list[Tool] = [
                             "millimetres), png (one view) or sprites (isometric from four sides). Returns the path.",
                             synonyms="exportar, imprimir, magicavoxel, sprite"),
          ExportArgs, ann(), _export, timeout_s=120),
-    Tool("model_import_vox", _d("Import a MagicaVoxel .vox file from this PC as a new model.", synonyms="importar vox"),
+    Tool("model_import_vox", _d("Import a MagicaVoxel .vox or a Minecraft .schem (WorldEdit/Sponge schematic: blocks become their "
+                                "texture colours) from this PC as a new model.", synonyms="importar vox, importar schematic, minecraft"),
          ImportArgs, ann(draft_safe=True), _import),
     Tool("reference_add", _d("Add a reference picture (path on this PC or base64) to turn into voxels; returns its id.",
                              synonyms="subir imagen, sprite, referencia"),
@@ -385,7 +386,7 @@ TOOLS: list[Tool] = [
     Tool("reference_grid", _d("A reference read as a small indexed grid (rows of characters, palette): what the builders and the model use."),
          RefGridArgs, ann(read_only=True), _ref_grid),
     Tool("reference_delete", _d("Delete a reference picture (confirm=true)."), RefDeleteArgs, ann(destructive=True), _ref_delete),
-    Tool("build_from_image", _d("Instant voxel model from a picture without the language model: inflate (puffed-up front), "
+    Tool("build_from_image", _d("Instant voxel model from a picture without the language model: sprite (the sprite as a voxel diorama piece), inflate (puffed-up front), "
                                 "extrude (slab) or hull (front + side silhouettes carved).", synonyms="convertir a voxel rápido"),
          BuildArgs, ann(draft_safe=True), _build, timeout_s=120),
     Tool("generate_start", _d("Ask the language model (DeepSeek on the Sparks by default) for a voxel version of one or more "

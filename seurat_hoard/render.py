@@ -82,6 +82,22 @@ def iso(model: VoxelModel, view: str = "iso", size: int = 8, background=(0, 0, 0
     xs, ys, zs = np.nonzero(any_vis)
     if not len(xs):
         return Image.new("RGBA", (max(1, size * 4), max(1, size * 4)), background)
+    # Ambient occlusion: each visible face darkens with the voxels around it in the layer it faces, so creases,
+    # wing roots and the ground contact read as volume instead of flat colour.
+    p = pad.astype(np.int8)
+    def around(layer_shift, axes):
+        tot = np.zeros(g.shape, np.int8)
+        for d1 in (-1, 0, 1):
+            for d2 in (-1, 0, 1):
+                if d1 == 0 and d2 == 0:
+                    continue
+                sh = [1, 1, 1]
+                sh[layer_shift[0]] += layer_shift[1]
+                sh[axes[0]] += d1
+                sh[axes[1]] += d2
+                tot += p[sh[0]:sh[0] + sx, sh[1]:sh[1] + sy, sh[2]:sh[2] + sz]
+        return tot
+    ao_top, ao_x, ao_z = around((1, 1), (0, 2)), around((0, 1), (1, 2)), around((2, 1), (0, 1))
     a = size * 0.8660254           # cos 30 * edge
     b = size * 0.5                 # sin 30 * edge
     # screen of a corner (x, y, z): u = (x - z) * a ; v = (x + z) * b - y * size
@@ -101,13 +117,13 @@ def iso(model: VoxelModel, view: str = "iso", size: int = 8, background=(0, 0, 0
         x, y, z = int(xs[i]), int(ys[i]), int(zs[i])
         base = pal[g[x, y, z]].astype(np.float64)
         if top_vis[x, y, z]:
-            c = tuple(int(v) for v in np.clip(base * 1.0, 0, 255)) + (255,)
+            c = tuple(int(v) for v in np.clip(base * (1.0 - 0.06 * ao_top[x, y, z]), 0, 255)) + (255,)
             draw.polygon([P(x, y + 1, z), P(x + 1, y + 1, z), P(x + 1, y + 1, z + 1), P(x, y + 1, z + 1)], fill=c, outline=line)
         if xp_vis[x, y, z]:
-            c = tuple(int(v) for v in np.clip(base * 0.78, 0, 255)) + (255,)
+            c = tuple(int(v) for v in np.clip(base * 0.8 * (1.0 - 0.06 * ao_x[x, y, z]), 0, 255)) + (255,)
             draw.polygon([P(x + 1, y, z), P(x + 1, y + 1, z), P(x + 1, y + 1, z + 1), P(x + 1, y, z + 1)], fill=c, outline=line)
         if zp_vis[x, y, z]:
-            c = tuple(int(v) for v in np.clip(base * 0.62, 0, 255)) + (255,)
+            c = tuple(int(v) for v in np.clip(base * 0.64 * (1.0 - 0.06 * ao_z[x, y, z]), 0, 255)) + (255,)
             draw.polygon([P(x, y, z + 1), P(x + 1, y, z + 1), P(x + 1, y + 1, z + 1), P(x, y + 1, z + 1)], fill=c, outline=line)
     return img
 

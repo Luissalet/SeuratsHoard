@@ -108,7 +108,7 @@
         <div class="grid2">
           <label class="field">
             <span>Tamaño <output id="gen-size-out">32</output> voxels</span>
-            <input type="range" id="gen-size" min="8" max="96" value="32">
+            <input type="range" id="gen-size" min="8" max="128" value="32">
           </label>
           <label class="field">
             <span>Colores <output id="gen-colors-out">16</output></span>
@@ -128,6 +128,13 @@
           <label class="field">
             <span>Rondas de revisión <output id="gen-rounds-out">2</output></span>
             <input type="range" id="gen-rounds" min="0" max="6" value="2">
+          </label>
+          <label class="field">
+            <span>Método</span>
+            <select id="gen-method">
+              <option value="code">Programa (el modelo escribe código)</option>
+              <option value="ops">Operaciones (piezas sueltas)</option>
+            </select>
           </label>
           <label class="field">
             <span>Esfuerzo</span>
@@ -222,6 +229,10 @@
           <label class="srow"><span>Tokens máximos por respuesta <small>(sin contar el razonamiento)</small></span><input type="number" name="max_tokens" min="1000" max="128000" step="1000"></label>
           <label class="srow"><span>Tokens para razonar <small>(se suman a la respuesta)</small></span><input type="number" name="thinking_tokens" min="0" max="900000" step="1000"></label>
           <label class="srow"><span>Tiempo límite por llamada (s)</span><input type="number" name="timeout_s" min="30" max="7200" step="10"></label>
+          <label class="srow"><span>Método por defecto</span>
+            <select name="method"><option value="code">Programa</option><option value="ops">Operaciones</option></select></label>
+          <label class="srow"><span>Tamaño de cuadrícula del programa</span><input type="number" name="code_size" min="8" max="128" step="1"></label>
+          <label class="srow"><span>Tiempo máximo del programa (s)</span><input type="number" name="program_timeout_s" min="5" max="600" step="5"></label>
           <label class="srow"><span>Pintar las referencias sobre la forma</span><input type="checkbox" name="auto_paint"></label>
           <label class="srow"><span>Pintar también la imagen lateral en los lados</span><input type="checkbox" name="paint_sides"></label>
           <label class="srow"><span>Generaciones a la vez <small>(al reiniciar)</small></span><input type="number" name="parallel_jobs" min="1" max="6" step="1"></label>

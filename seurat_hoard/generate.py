@@ -29,6 +29,7 @@ from .errors import SeuratError
 from .hoard_link.ids import new_id
 from .images import Indexed, index_picture, to_png
 from .llm import ModelClient, parse_json
+from .program import ProgramError, run_program
 from .palette import DEFAULT_PALETTE, merge
 from .render import ortho, png_bytes, sheet
 from .voxels import KEY_CHARS, MAX_SIDE, VoxelModel, apply_ops, norm_hex
@@ -37,6 +38,7 @@ log = logging.getLogger("seurat.generate")
 
 ROLES = ("front", "side", "top", "back", "extra")
 STARTS = ("auto", "inflate", "hull", "extrude", "empty", "current")
+METHODS = ("code", "ops")
 
 OPS_GUIDE = """OPERATIONS (JSON objects, applied in order; c is a palette index, c:0 erases with the same shape):
 SHAPE (use these to build volumes; most models need only these):
@@ -117,6 +119,61 @@ wrong parts (neck, wings, tail, legs), wrong proportions, holes, floating pieces
 Never answer only {{"op":"clear"}}: if you rebuild, include the whole new model in the same answer.
 If the model is already good, answer {{"done": true, "notes": "why", "ops": []}}.
 Answer ONE JSON object: {{"notes": "...", "palette_add": [...], "ops": [...]}}"""
+
+
+CODE_SYSTEM = """You are a voxel artist working inside Seurat's Hoard, a voxel studio. You build voxel models by writing a
+short Python program that fills a voxel grid, the way the best voxel artists script their models: loops of feathers,
+blended ellipsoids, tapered limbs, symmetry.
+
+THE PROGRAM
+PALETTE = ["#rrggbb", ...]   # up to 40 colours; index 1 is the FIRST colour; 0 is empty
+def build(g):                # g: numpy uint8 array, shape (X, Y, Z), all zeros
+    ...                      # g[x, y, z] = colour index (or masks: g[mask] = c)
+Axes: x to the right, y UP (y = 0 is the ground), z TOWARDS the viewer. The subject faces +z (looks at the viewer).
+Ready without import: np (numpy), math, X, Y, Z, and xs, ys, zs (float32 arrays of the grid's shape with each voxel's
+coordinates, for masks such as g[((xs-cx)/rx)**2 + ((ys-cy)/ry)**2 + ((zs-cz)/rz)**2 <= 1] = c), plus helpers:
+  ellipsoid(g, c, center, radii)          sphere(g, c, center, r)
+  capsule(g, c, a, b, r0, r1=None)        tube from point a to point b, radius r0 tapering to r1: necks, tails, legs,
+                                          horns, single feathers, spikes, fingers
+  box(g, c, lo, hi)                       inclusive corners
+  polygon(g, c, points, plane, lo, hi)    flat polygon with thickness: plane "top" (points [x, z], thickness along y
+                                          from lo to hi), "front" (points [x, y], along z) or "side" (points [z, y],
+                                          along x): wing membranes, fins, tail fans, crests, blades
+  mirror_x(g)                             copy the low-x half onto the high-x half (build the left side, then mirror)
+  shade_by_height(g, c, c_dark, below_y)  recolour c to c_dark below a height (undersides)
+c = 0 erases with the same shape. You may import math, numpy, random, itertools, functools and colorsys, nothing else (no
+files, no os/sys, no double-underscore names). It must finish within a minute: use numpy masks, never a Python loop over
+every voxel; loops over parts (feathers, segments, spikes, rings) are fine.
+
+WHAT MAKES IT GOOD
+- Use the grid: the subject spans most of X and Y (1-2 voxels of margin) and has real depth in Z.
+- Solid, rounded, readable volumes: bodies and heads from overlapping ellipsoids, necks, limbs and tails from tapered
+  capsules, wings from rows of overlapping tapered feathers fanning out (a loop of capsules or polygons), crests and tail
+  fans the same way. Think in 3D: every part has a place in x, y AND z; the model must read from the side and from above,
+  not only from the front. No paper-thin parts except wing membranes and fins (at least 2 voxels thick even there).
+- Colours: 8-20 flat colours. Each main colour with a lighter shade (top, front-facing) and a darker one (underside,
+  back, inner sides); accents for eyes, beak, markings. NO black outlines: they are a 2D sprite habit; voxels get their
+  edges from the light.
+- References: official artwork shows the true anatomy and proportions; small game sprites are drawn from above at an
+  angle and squashed: use them for colours and markings, not as a projection.
+- A clear pose that fits the grid (for a flying creature: wings spread wide, slightly raised).
+
+ANSWER: ONE JSON object {"notes": "what you built, in one or two sentences", "code": "<the complete program>"}"""
+
+CODE_REVIEW = """Round {round} of {rounds}. Your previous program (below) built the model in the LAST picture: a contact
+sheet with flat views (front, left, top, back) and two isometric views. The other pictures are the references.
+Current model: grid {size}, {count} voxels, bounds {bounds}.
+{problem}
+Compare carefully with the references and fix the biggest problems first: wrong anatomy or proportions, parts missing
+or misplaced in depth (look at the left and top views), flat boards, holes, floating pieces, colours that do not match,
+missing characteristic details. Keep what already works. Answer the COMPLETE new program (it replaces the old one).
+If the model is already excellent, answer {{"done": true, "notes": "why", "code": ""}}.
+Answer ONE JSON object: {{"notes": "...", "code": "..."}}
+
+Previous program:
+```python
+{code}
+```"""
 
 
 @dataclass
@@ -282,6 +339,12 @@ class Generator:
         for role in ROLES:
             for _, ix, _ in refs.get(role, []):
                 palette, _ = merge(palette, ix.palette, limit=40)
+        ref_colors = list(palette)
+        method = p.get("method") or settings["method"]
+        if method not in METHODS:
+            raise SeuratError("invalid", f"method must be one of {', '.join(METHODS)}.")
+        if p.get("start") == "current" or not use_model:
+            method = "ops"
         shades = []
         for c in list(palette):
             r, g, b = (int(c[i: i + 2], 16) for i in (1, 3, 5))
@@ -309,7 +372,13 @@ class Generator:
                 # The model sculpts from nothing: the instant builders make flat slabs from angled sprites.
                 fallback = ("hull" if side is not None else "inflate") if front is not None else ""
                 start = "empty" if use_model else fallback
-            if start == "empty" and front is None:
+            if method == "code":
+                start = "empty"
+            if start == "empty" and method == "code":
+                side_n = int(settings["code_size"])
+                size = [min(MAX_SIDE, max(8, int(v))) for v in (p.get("size") or [side_n, side_n, side_n])]
+                model = VoxelModel.empty("tmp", name, size, palette)
+            elif start == "empty" and front is None:
                 size = [min(MAX_SIDE, max(4, int(v))) for v in (p.get("size") or settings["new_size"])]
                 model = VoxelModel.empty("tmp", name, size, palette)
             elif start == "empty":
@@ -326,7 +395,10 @@ class Generator:
         llm_name = ""
         if use_model and not job.cancel.is_set():
             try:
-                llm_name = self._model_rounds(job, model, refs, rounds, start, p)
+                if method == "code":
+                    llm_name = self._code_rounds(job, model, refs, rounds, p, ref_colors)
+                else:
+                    llm_name = self._model_rounds(job, model, refs, rounds, start, p)
             except SeuratError as exc:
                 if job.cancel.is_set():
                     pass                      # cancelled mid-call: handled below
@@ -348,17 +420,20 @@ class Generator:
             job.say("cancelado: se guarda lo que había")
 
         # ---- save
+        program = (model.source or {}).get("program") if method == "code" else None
         if into:
             target = self.svc.store.get(into)
             target.grid, target.palette = model.grid, model.palette
             target.source = {"kind": "generated", "mode": start, "references": [r["id"] for r in p["references"]],
-                             "prompt": p.get("prompt") or "", "llm": llm_name, "rounds": len(job.rounds) - 1, "job": job.id}
+                             "prompt": p.get("prompt") or "", "llm": llm_name, "rounds": len(job.rounds) - 1, "job": job.id,
+                             "method": method, **({"program": program} if program else {})}
             saved = self.svc.store.save(target, version_note="before generation " + job.id)
         else:
             model.id = self.svc.store.new_id()
             model.name = name
             model.source = {"kind": "generated", "mode": start, "references": [r["id"] for r in p["references"]],
-                            "prompt": p.get("prompt") or "", "llm": llm_name, "rounds": len(job.rounds) - 1, "job": job.id}
+                            "prompt": p.get("prompt") or "", "llm": llm_name, "rounds": len(job.rounds) - 1, "job": job.id,
+                            "method": method, **({"program": program} if program else {})}
             saved = self.svc.store.save(model)
         job.model_id, job.model_name = saved.id, saved.name
         job.say(f"guardado: {saved.name} ({saved.count} voxels)")
@@ -485,6 +560,99 @@ class Generator:
                                  guard=guard, silhouette=self._silhouette_report(model, refs) if refs else "", errors=self._errors_text(result),
                                  reference=reference, paint_rule=paint_rule)
             text += "\n\n" + OPS_GUIDE + "\n\nPalette (index: colour):\n" + self._palette_text(model)
+            images = list(ref_images) + ([png_bytes(sheet(model, 900))] if model.count else [])
+        return llm_name
+
+    def _code_rounds(self, job: Job, model: VoxelModel, refs: dict, rounds: int, p: dict[str, Any], ref_colors: list[str]) -> str:
+        """The model writes a program that builds the voxels; Seurat runs it, shows the result and asks for a better
+        program, round after round. The last program that worked is the model (kept in its source)."""
+        settings = self.svc.settings
+        client: ModelClient = self.svc.llm
+        effort = p.get("effort") or settings["effort"]
+        max_tokens = int(settings["max_tokens"])
+        thinking_tokens = int(settings["thinking_tokens"])
+        timeout = float(settings["timeout_s"])
+        ref_images = [img for role in ROLES for _, _, img in refs.get(role, [])][:4]
+        sx, sy, sz = model.size
+        lines = [f"Build a voxel model in a grid of size X={sx}, Y={sy}, Z={sz}."]
+        if p.get("prompt"):
+            lines.append("What the user wants: " + str(p["prompt"]).strip())
+        for role in ROLES:
+            for meta, ix, _ in refs.get(role, []):
+                lines.append(f"Reference picture '{meta.get('name')}' ({role}, {meta.get('width')}x{meta.get('height')} px).")
+        if ref_colors:
+            lines.append("Colours found in the references (use them and add lighter and darker shades): " + ", ".join(ref_colors[:24]))
+        if not refs:
+            lines.append("There are no pictures: build it from the description.")
+        text = "\n".join(lines)
+        images = list(ref_images)
+        llm_name, good_code, total = "", "", 1 + rounds
+        for rnd in range(1, total + 1):
+            if job.cancel.is_set():
+                break
+            label = f"ronda {rnd} de {total}" + (": el modelo escribe el programa" if rnd == 1 else ": revisión")
+            job.say(label)
+
+            def progress(n_text: int, n_reason: int, label=label) -> None:
+                job.step = f"{label} · " + (f"pensando: {n_reason} tokens" if n_reason and not n_text else
+                                            f"escribiendo: {n_text} tokens" + (f" (tras pensar {n_reason})" if n_reason else ""))
+
+            answer = client.chat(CODE_SYSTEM, text, images, max_tokens=max_tokens, effort=effort, timeout=timeout,
+                                 on_progress=progress, cancel=job.cancel, thinking_tokens=thinking_tokens)
+            llm_name = answer.model or llm_name
+            self._save_answer(job, rnd, answer.text)
+            if answer.reasoning:
+                self._save_answer(job, rnd, answer.reasoning, suffix="-think")
+            job.say(f"respuesta de {llm_name or 'el modelo'} en {answer.seconds:.0f} s"
+                    + (f" tras pensar {answer.reasoning_tokens} tokens" if answer.reasoning_tokens else "")
+                    + (f" en {answer.thinking_calls} llamadas" if answer.thinking_calls > 1 else "")
+                    + (" (la respuesta se pidió aparte con su razonamiento)" if answer.followed_up else ""))
+            if answer.finish == "cancelled":
+                break
+            problem, result = "", {"applied": 0, "errors": []}
+            try:
+                data = parse_json(answer.text)
+            except ValueError:
+                data = {}
+            code = data.get("code") if isinstance(data.get("code"), str) else ""
+            notes = str(data.get("notes") or "")[:600]
+            if data.get("done") and good_code:
+                job.say("el modelo da el resultado por bueno")
+                break
+            if not code.strip():
+                problem = "YOUR LAST ANSWER HAD NO PROGRAM (the JSON needs a \"code\" string with the complete program)."
+                result["errors"] = ["no program in the answer"]
+            else:
+                self._save_answer(job, rnd, code, suffix=".py")
+                job.say(f"ronda {rnd}: ejecutando el programa ({len(code.splitlines())} líneas)")
+                try:
+                    res = run_program(code, model.size, timeout=float(settings["program_timeout_s"]))
+                except ProgramError as exc:
+                    problem = f"YOUR LAST PROGRAM FAILED: {exc.message}\n{exc.trace}".strip()
+                    result["errors"] = [exc.message[:300]]
+                    job.say(f"ronda {rnd}: el programa falló: {exc.message[:200]}")
+                else:
+                    if res.count == 0:
+                        problem = "YOUR LAST PROGRAM LEFT THE GRID EMPTY (did build(g) write into g?)."
+                        result["errors"] = ["empty grid"]
+                        job.say(f"ronda {rnd}: el programa no puso ningún voxel")
+                    else:
+                        model.grid, model.palette = res.grid, res.palette
+                        model.source = {**(model.source or {}), "program": code}
+                        good_code = code
+                        result["applied"] = 1
+                        job.say(f"ronda {rnd}: {res.count} voxels, {len(res.palette)} colores")
+            self._record(job, rnd, notes, result, model)
+            if rnd == total:
+                break
+            base = good_code or code
+            if not base:
+                text = "\n".join(lines) + "\n\n" + problem
+                continue
+            text = CODE_REVIEW.format(round=rnd + 1, rounds=total, size=model.size, count=model.count, bounds=model.bounds(),
+                                      problem=(problem + ("\nThe program shown is your LAST ONE THAT WORKED; the model in the picture is its result." if problem and good_code else "")),
+                                      code=(code if problem and code and not good_code else base))
+            text = "\n".join(lines) + "\n\n" + text
             images = list(ref_images) + ([png_bytes(sheet(model, 900))] if model.count else [])
         return llm_name
 

@@ -9,7 +9,13 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
 - **De imagen a voxels**
   - *Rápido* (sin modelo): *inflar* (el frente abombado como un cojín), *extruir* (una losa) o *silueta* (vistas de
     frente y lado talladas en un bloque, coloreadas desde cada vista).
-  - *Con el modelo de lenguaje* (DeepSeek V4.1 Flash en las Sparks por defecto, a través de Hoard Link): ve las
+  - *Con el modelo de lenguaje, como programa* (por defecto): DeepSeek V4.1 Flash escribe un programa en Python que
+    construye los voxels (elipsoides fundidos, cápsulas que se estrechan, bucles de plumas, polígonos, simetría, máscaras
+    de numpy); Seurat lo ejecuta en un proceso aparte con tiempo límite y sin ficheros ni red, enseña el resultado y le
+    pide un programa mejor ronda tras ronda. El último programa que funcionó se guarda con el modelo. Cuadrículas de
+    hasta 128 de lado; escenas solo con descripción o criaturas desde imágenes (el artwork oficial funciona mucho mejor
+    que los sprites pequeños de juego).
+  - *Con el modelo de lenguaje, como operaciones* (`method: ops`): ve las
     imágenes de referencia y sus cuadrículas de píxeles, razona a fondo (esfuerzo `max` por defecto, varios minutos por
     ronda) y esculpe la forma por partes (elipsoides, cápsulas que se estrechan para cuellos y colas, prismas de polígono
     para alas y aletas). Seurat pinta las imágenes sobre esa forma (frente y espalda; también la lateral si lo activas) y el modelo revisa una

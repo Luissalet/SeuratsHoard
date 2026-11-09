@@ -15,6 +15,12 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
 - Read reference pictures (PNG, JPG, GIF, WebP, BMP): crop, flat background to transparent, pixel-art scale undone,
   reduced to a size and a number of colours (`reference_grid`).
 - Instant models from pictures: inflate, extrude, hull (front + side + optional top).
+- Voxel programs (default generation method `code`): the model writes Python (`PALETTE` + `build(g)`, helpers ellipsoid,
+  sphere, capsule, box, polygon, mirror_x, shade_by_height; numpy masks over xs/ys/zs), run by `program.py` in a separate
+  `python -I` process (`sandbox_runner.py`): restricted builtins, imports limited to math/numpy/random/itertools/
+  functools/colorsys, source checked for files/processes/dunder names, `program_timeout_s` limit. Each round renders the
+  result and asks for a complete better program; failures and empty grids are fed back; the last working program is
+  stored in the model's `source.program`. Grid `code_size` (64) or the call's `size`, up to 128.
 - Generations with the language model (`generate_start` → `generate_status`): DeepSeek V4.1 Flash on the Sparks by
   default (resolved through Hoard Link and Faustus's registry, also while Faustus runs on a Spark), or any
   OpenAI-compatible URL from Settings. By default it reasons at the highest level (effort `max`: up to 200 000 thinking

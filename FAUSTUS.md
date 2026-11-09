@@ -23,14 +23,19 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
   (large render from any side) and `done`; budgets `agent_steps` (16), `agent_minutes` (90) and `agent_step_thinking`
   (30 000 per action). Each working run is saved; the program and brief stay in the source.
 - Sprite target (`target`: auto/sprite/free; auto = sprite when the front/back/side pictures are small pixel art): the
-  sprites are the design to rebuild in 3D (grid about one voxel per sprite pixel, at least 32). The prompt explains that
-  front/back sprites are seen from `sprite_pitch` (45) degrees above and side sprites from `sprite_side_pitch` (20), and
-  after every run `spritecam.py` renders the model from those cameras (`render.camera`: orthographic from any yaw and
-  pitch, painter's order, face lighting), fits it to each sprite's subject box at the sprite's resolution and returns
-  silhouette IoU, missing/extra shares, colour difference (outline excluded) and width/height ratios, plus a sheet
-  (sprite, model, red/blue diff) that the agent sees and the job keeps per round (`sprite_render`, `match`, `views`).
-  The side sprite is tried from both sides. `model_sprite_match` does the same for any model; `model_look` has views
-  overworld_front/back/left/right.
+  sprites are the design to rebuild in 3D at one voxel per sprite pixel (`spritecam.grid_size`: X from the front/back
+  width, Y and Z from the side sprite). The side sprite is a true profile (`sprite_side_pitch` 0), counts double in the
+  score and reaches the program as `SIDE` (Z, Y) in grid coordinates with `SIDE_MASK`, `SPRITE_PALETTE`,
+  `extrude_side`, `carve_side`, `paint_side` and `paint_view(g, role)` (`sandbox_runner.sprite_helpers`; data from
+  `spritecam.program_data`); the prompt carries the palette and a pixel map of each sprite with the grid mapping.
+  Front/back sprites are seen from `sprite_pitch` (45) degrees above; their horizontal axis is x. After every run
+  `spritecam.match` projects the model from each camera at one voxel per pixel (eight samples per voxel, nearest wins,
+  flat colours), places it on the sprite (box centres, then the best shift within 4 px) and returns silhouette IoU,
+  missing/extra shares, colour difference (outline excluded) and the model's width/height relative to the sprite, plus
+  a sheet (sprite, model, red/blue diff) the agent sees and the job keeps per round (`sprite_render`, `match`, `views`).
+  Models far from the sprite's size are scaled instead (`fit` auto/pixel/area). The side sprite is tried from both
+  sides. `model_sprite_match` does the same for any model; `model_look` has views overworld_front/back/left/right
+  (`render.camera`: orthographic from any yaw and pitch); `model_program` takes `sprites` for the same tools.
 - Voxel programs in fixed rounds (method `code`): first the model writes a design brief (what the subject is from its
   own knowledge and the description, parts with sizes and x/y/z positions, palette, what must read from each side;
   pictures are only hints, never traced), shown in the job and kept in `source.brief`; then it writes Python (`PALETTE` + `build(g)`, helpers ellipsoid,
@@ -67,8 +72,8 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
 - Be quick with the default settings: with effort `max` each round takes several minutes (a four-round generation can
   take half an hour or more). Effort `off` answers in seconds but sculpts much worse.
 - Copy game sprites as exact projections: overworld sprites are drawn from above at an angle and by hand, so even with
-  the sprite target the match is judged on silhouettes from approximate cameras (45/20 degrees by default); the parts no
-  sprite shows (underside, between the wings) are the model's own reading.
+  the sprite target only the side profile is exact; the front/back camera (45 degrees by default) is approximate, and
+  the parts no sprite shows (underside, between the wings) are the model's own reading.
 
 ## Where things are
 

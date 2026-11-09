@@ -33,6 +33,109 @@ def _import(name, globals=None, locals=None, fromlist=(), level=0):
     return builtins.__import__(name, globals, locals, fromlist, level)
 
 
+def _basis(yaw, pitch):
+    yw, pt = math.radians(yaw), math.radians(max(-89.0, min(89.0, pitch)))
+    c = np.array([math.sin(yw) * math.cos(pt), math.sin(pt), math.cos(yw) * math.cos(pt)])
+    r = np.cross([0.0, 1.0, 0.0], c)
+    r /= np.linalg.norm(r)
+    return c, r, np.cross(c, r)
+
+
+def sprite_helpers(shape, data):
+    """Helpers for a sprite target: the sprites' palette, the side sprite in grid coordinates and ways to carve to it
+    and paint from the sprites."""
+    X, Y, Z = shape
+    palette = list(data.get("palette") or [])
+    views = {k: dict(v, idx=np.asarray(v["idx"], np.int64)) for k, v in (data.get("views") or {}).items()}
+    side = np.asarray(data["side"], np.int64) if data.get("side") is not None else np.zeros((Z, Y), np.int64)
+    side_mask = side > 0
+    plane = side.T[None, :, :]            # (1, Y, Z)
+
+    def carve_side(g):
+        """Erase every voxel outside the side sprite's silhouette (the side sprite is a true profile: z = column,
+        y = row from the bottom). Returns how many were erased."""
+        cut = np.broadcast_to(~(plane > 0), g.shape) & (g > 0)
+        g[cut] = 0
+        return int(cut.sum())
+
+    def extrude_side(g, x0, x1, c=None):
+        """Fill x0..x1 (inclusive) wherever the side sprite has a pixel, with the sprite's colours (or colour c)."""
+        a, b = sorted((max(0, int(x0)), min(X - 1, int(x1))))
+        cols = np.broadcast_to(plane, (b - a + 1, Y, Z))
+        view = g[a:b + 1]
+        m = cols > 0
+        view[m] = cols[m] if c is None else c
+        return int(m.sum())
+
+    def paint_side(g, depth=1):
+        """Colour the flanks seen from the side (the outermost `depth` voxels from -x and from +x) with the side
+        sprite's colours."""
+        occ = g > 0
+        S = side.T                         # (Y, Z)
+        m = occ.any(axis=0) & (S > 0)
+        yy, zz = np.nonzero(m)
+        if not len(yy):
+            return 0
+        first = occ.argmax(axis=0)[yy, zz]
+        last = (X - 1 - occ[::-1].argmax(axis=0))[yy, zz]
+        n = 0
+        for d in range(max(1, int(depth))):
+            for xx in (first + d, last - d):
+                ok = (xx >= 0) & (xx < X)
+                ok[ok] = occ[xx[ok], yy[ok], zz[ok]]
+                g[xx[ok], yy[ok], zz[ok]] = S[yy[ok], zz[ok]]
+                n += int(ok.sum())
+        return n
+
+    def paint_view(g, role, depth=1.5):
+        """Colour the surface the game camera of the `role` sprite (front, back, side) sees with that sprite's
+        colours, at one voxel per sprite pixel, placed the way the comparison places it (centres together, then the
+        best small shift). `depth`: how far behind the nearest voxel of each pixel still gets painted."""
+        if role not in views:
+            raise ValueError(f"no {role} sprite (have: {', '.join(views) or 'none'})")
+        v = views[role]
+        idx = v["idx"]
+        h, w = idx.shape
+        c, r, u = _basis(v["yaw"], v["pitch"])
+        occ = np.argwhere(g > 0)
+        if not len(occ):
+            return 0
+        ctr = occ + 0.5
+        pu, pv, dep = ctr @ r, -(ctr @ u), ctr @ c
+        ix = np.floor(pu - np.floor(pu.min())).astype(np.int64)
+        iy = np.floor(pv - np.floor(pv.min())).astype(np.int64)
+        mh, mw = int(iy.max()) + 1, int(ix.max()) + 1
+        mm = np.zeros((mh, mw), bool)
+        mm[iy, ix] = True
+        t = idx > 0
+        ty, tx = np.nonzero(t)
+        ox0 = int(round((tx.min() + tx.max() + 1) / 2 - mw / 2))
+        oy0 = int(round((ty.min() + ty.max() + 1) / 2 - mh / 2))
+        best, best_s = (ox0, oy0), -1.0
+        for dy in range(-4, 5):
+            for dx in range(-4, 5):
+                ox, oy = ox0 + dx, oy0 + dy
+                cand = np.zeros((h, w), bool)
+                y0, x0, y1, x1 = max(0, oy), max(0, ox), min(h, oy + mh), min(w, ox + mw)
+                if y1 > y0 and x1 > x0:
+                    cand[y0:y1, x0:x1] = mm[y0 - oy:y1 - oy, x0 - ox:x1 - ox]
+                sc = (cand & t).sum() / max(1, (cand | t).sum()) - 1e-4 * (abs(dx) + abs(dy))
+                if sc > best_s:
+                    best, best_s = (ox, oy), sc
+        px, py = ix + best[0], iy + best[1]
+        ok = (px >= 0) & (px < w) & (py >= 0) & (py < h)
+        key = np.where(ok, py * w + px, 0)
+        top = np.full(h * w, -1e9)
+        np.maximum.at(top, key[ok], dep[ok])
+        col = np.where(ok, idx[py.clip(0, h - 1), px.clip(0, w - 1)], 0)
+        sel = ok & (dep >= top[key] - depth) & (col > 0)
+        g[occ[sel, 0], occ[sel, 1], occ[sel, 2]] = col[sel]
+        return int(sel.sum())
+
+    return {"SPRITE_PALETTE": palette, "SIDE": side, "SIDE_MASK": side_mask, "carve_side": carve_side,
+            "extrude_side": extrude_side, "paint_side": paint_side, "paint_view": paint_view}
+
+
 def helpers(shape):
     X, Y, Z = shape
     xs, ys, zs = np.indices(shape, dtype=np.float32)
@@ -162,6 +265,8 @@ def main() -> None:
     env = {"__builtins__": dict(SAFE_BUILTINS, __import__=_import), "np": np, "numpy": np, "math": math,
            "__name__": "voxel_program"}
     env.update(helpers(shape))
+    if req.get("sprites"):
+        env.update(sprite_helpers(shape, req["sprites"]))
     try:
         exec(compile(req["code"], "<voxel program>", "exec"), env)
         if "build" not in env or not callable(env["build"]):

@@ -201,29 +201,51 @@ details, run again, and so on. Errors are normal: read the failing line and fix 
 SPRITE_TARGET = """
 SPRITE TARGET (this overrides what is said above about pictures). The pictures marked FRONT, BACK and SIDE are the
 subject's small pixel-art game sprites, and THEY ARE THE TARGET: build the 3D voxel version of exactly that sprite
-design, the way voxel mods rebuild handheld-game overworld sprites in 3D: chunky, about one voxel per sprite pixel, the
-sprite's own flat colours, its proportions, its pose and its markings; not a realistic or different design.
-The sprites are NOT flat views. The game camera looks down on the world:
-- the FRONT sprite shows the subject facing the camera, seen from about {fb} degrees above the horizon;
-- the BACK sprite shows it from behind, from the same height;
-- the SIDE sprite is seen from about {side} degrees above, nearly in profile.
-So in the front and back sprites the vertical axis of the picture mixes height and depth: a part lower in the picture can
-be NEARER the camera rather than lower in the world (seen from behind and above, a bird's tail fan lands at the bottom
-because it is the nearest part; wings spread flat show their whole top surface). Reason in 3D: for each part decide its
-x, y AND z so that from each of those cameras it lands where the sprite has it, and the side sprite fixes the depth.
-Leave the black outline out (it is how sprites draw edges); dark outline pixels inside the shape mark where parts
-separate. Use the sprite's colours (listed below), with at most one lighter and one darker shade of each.
+design, the way voxel mods rebuild handheld-game overworld sprites in 3D: chunky, one voxel per sprite pixel, the
+sprite's own flat colours, its proportions, its pose and its markings; not a realistic or different design. Other
+pictures (official artwork) are only there so you understand the anatomy in 3D.
+
+THE CAMERAS. The sprites were drawn from different angles:
+- The SIDE sprite is a TRUE PROFILE with no camera angle ({side} degrees). It is the MOST IMPORTANT and most reliable
+  view and it counts double in the score: it gives the exact length (z) and height (y) of every part. In your grid its
+  column is z and its row is y, one pixel per voxel (the placement is given below and in SIDE). Match it first and
+  exactly.
+- The FRONT sprite shows the subject facing the camera from about {fb} degrees above the horizon, the BACK sprite from
+  behind at the same height. Their HORIZONTAL axis is exactly x, one pixel per voxel: the sprite's width at each row is
+  the width of the model there (wingspan, body, head). Their vertical axis mixes height and depth: lower in the picture
+  can be NEARER the camera (seen from behind and above, a bird's tail fan lands at the bottom because it is the nearest
+  part; wings spread flat show their whole top surface). Use them for x widths, for what is on top and on the back,
+  and for colours of the upper surfaces, after the profile is right.
+
+SPRITE TOOLS in the program (ready, no import):
+  SPRITE_PALETTE                 the sprites' colours; start your palette with them: PALETTE = SPRITE_PALETTE + [extra
+                                 shades], so index i+1 is SPRITE_PALETTE[i] (the tools paint with these indices)
+  SIDE                           int array (Z, Y): the side sprite in grid coordinates, colour index per (z, y), 0 empty
+  SIDE_MASK                      bool array (Z, Y): the side silhouette (outline included)
+  extrude_side(g, x0, x1, c=None)  fill x0..x1 wherever the side sprite has a pixel (sprite colours, or colour c)
+  carve_side(g)                  erase every voxel outside the side silhouette: run it after building the volumes and
+                                 the profile is exact
+  paint_side(g, depth=1)         colour the flanks seen from the side with the side sprite's colours
+  paint_view(g, role, depth=1.5) colour the surface the front/back/side camera sees with that sprite's colours
+A good way to work: build each part as a rounded volume of the right x width (from the front/back sprites) and the
+right z/y extent (from SIDE), carve_side(g) so the profile is exact, then paint_view(g, "back") and paint_view(g,
+"front") for the top and front colours and paint_side(g) last for the flanks, then mirror_x if you built one half
+(mirror before painting if the colours are symmetric). Leave the black outline out (the tools already treat it as an
+edge). Use extra lighter/darker shades only where the sprite has them.
+
 After every run Seurat shows each sprite next to your model seen from the SAME camera at the sprite's resolution, and a
 silhouette diff (red: in the sprite but missing in your model; blue: your model has it but the sprite does not), with
-match scores. Drive them up: silhouette match 0.85 or better on every view, the colours in the right places. The
+match scores. Drive them up: side 0.95 or better, front and back 0.85 or better, colours in the right places. The
 contact sheet after it shows the model from the usual flat and isometric views, to check it in 3D."""
 
 SPRITE_BRIEF = """
-THE PICTURES ARE THE TARGET: they are game sprites of the subject (front, back, side) drawn from a camera above the
-world ({fb} degrees for front and back, {side} degrees for the side). The brief must describe the 3D model that, seen
-from those cameras, looks like those sprites: the sprite's design, proportions, pose and colours, one voxel per sprite
-pixel or so. Work out where every part is in x, y and z from the three sprites together: in the front and back sprites
-lower in the picture can mean nearer the camera. Ignore the black outline."""
+THE PICTURES ARE THE TARGET: they are game sprites of the subject. The SIDE sprite is a true profile (no camera angle):
+its columns are z and its rows y, one pixel per voxel, so it fixes the length and height of every part exactly and it
+matters most. The FRONT and BACK sprites are drawn from about {fb} degrees above: their horizontal axis is exactly x (one
+pixel per voxel: they give the widths), their vertical axis mixes height and depth (lower can mean nearer). The brief
+must describe the 3D model that, seen from those cameras, looks like those sprites: the sprite's design, proportions,
+pose and colours, one voxel per sprite pixel. Use the pixel maps given (coordinates) to place every part in x, y and z.
+Other pictures (artwork) only help to understand the anatomy. Ignore the black outline."""
 
 CODE_REVIEW = """Round {round} of {rounds}. Your previous program (below) built the model in the LAST picture: a contact
 sheet with flat views (front, left, top, back) and two isometric views. The other pictures are the references.
@@ -457,11 +479,11 @@ class Generator:
                 start = "empty"
             if start == "empty" and method in ("code", "agent"):
                 side_n = int(settings["code_size"])
+                auto = [side_n, side_n, side_n]
                 if job.sprites and method == "agent":
-                    # about one voxel per sprite pixel, like the voxel mods
-                    longest = max(max(sp.rgba.shape[:2]) for sp in job.sprites)
-                    side_n = min(MAX_SIDE, max(32, -(-(longest + 4) // 8) * 8))
-                size = [min(MAX_SIDE, max(8, int(v))) for v in (p.get("size") or [side_n, side_n, side_n])]
+                    # one voxel per sprite pixel, like the voxel mods: X from the front/back width, Y and Z from the profile
+                    auto = spritecam.grid_size(job.sprites)
+                size = [min(MAX_SIDE, max(8, int(v))) for v in (p.get("size") or auto)]
                 model = VoxelModel.empty("tmp", name, size, palette)
             elif start == "empty" and front is None:
                 size = [min(MAX_SIDE, max(4, int(v))) for v in (p.get("size") or settings["new_size"])]
@@ -846,11 +868,25 @@ class Generator:
         for role in ROLES:
             for meta, ix, _ in refs.get(role, []):
                 lines.append(f"Reference picture '{meta.get('name')}' ({role}, {meta.get('width')}x{meta.get('height')} px).")
+        sprite_data = spritecam.program_data(sprites, model.size, fb_pitch, side_pitch) if sprites else None
         if sprites:
-            for sp in sprites:
+            pal = sprite_data["palette"]
+            keys = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            lines.append("SPRITE_PALETTE (letter in the pixel maps = colour): "
+                         + ", ".join(f"{keys[i % len(keys)]}={c}" for i, c in enumerate(pal)))
+            for sp in sorted(sprites, key=lambda s: {"side": 0, "front": 1, "back": 2}.get(s.role, 3)):
                 h, w = sp.rgba.shape[:2]
-                lines.append(f"{sp.role.upper()} sprite '{sp.name}': {w}x{h} pixels at its real size.")
-            lines.append("Sprite colours (use these): " + ", ".join(spritecam.colours(sprites)))
+                head = f"\n{sp.role.upper()} sprite '{sp.name}', {w}x{h} pixels ('.' empty, '#' outline, letters = colours)"
+                if sp.role == "side" and sprite_data.get("side_place"):
+                    pl = sprite_data["side_place"]
+                    head += (f". In your grid pixel (column c, row r) is the voxel column z = {pl['z0']} + c, y = "
+                             f"{pl['y0'] + pl['h'] - 1} - r (that is the SIDE array). The subject faces +z (right in this map).")
+                else:
+                    facing = "facing the camera" if sp.role == "front" else "from behind"
+                    mirrored = "; seen from behind, so x grows to the LEFT" if sp.role == "back" else ""
+                    head += (f", camera {int(fb_pitch)} degrees above, {facing}: column = x (one pixel per voxel{mirrored}; the "
+                             "subject's centre column is the middle of the model), rows mix height and depth.")
+                lines.append(head + ":\n" + spritecam.char_map(sp, pal))
         elif ref_colors:
             lines.append("Colours seen in the pictures (hints only): " + ", ".join(ref_colors[:24]))
         if not refs:
@@ -928,7 +964,7 @@ class Generator:
             self._save_answer(job, step, code, suffix=".py")
             history[-1]["content"] = json.dumps({"action": "run", "notes": notes, "code": code})
             try:
-                res = run_program(code, model.size, timeout=float(settings["program_timeout_s"]))
+                res = run_program(code, model.size, timeout=float(settings["program_timeout_s"]), sprites=sprite_data)
             except ProgramError as exc:
                 job.say(f"{label}: el programa falló ({exc.message[:160]})")
                 self._record(job, step, notes, {"applied": 0, "errors": [exc.message[:300]]}, model)

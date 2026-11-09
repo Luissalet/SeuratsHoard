@@ -14,10 +14,13 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
     and says when it is finished (step and time budgets in Settings). Every run that works is saved.
   - *Game sprites as the target* (`target: sprite`, automatic for small pixel art): the front, back and side pictures
     are overworld sprites to rebuild in 3D, the way voxel mods do it (about one voxel per sprite pixel, the sprite's own
-    colours and design). Those sprites are drawn from a camera above the world, so after every run Seurat renders the
-    model from the same camera (front and back 45 degrees above the horizon, sides 20, both in Settings), brings it to
-    the sprite's resolution and shows the model each sprite next to its render with a silhouette diff (red missing,
-    blue extra) and match scores; the job panel shows them per round.
+    colours and design). The side sprite is a true profile (no camera angle): the most important view, it counts double
+    and the program gets it as an array in grid coordinates (`SIDE`, column = z, row = y) with tools to carve the model
+    to it (`carve_side`), fill it (`extrude_side`) and paint from it (`paint_side`, `paint_view` for any sprite), plus the
+    sprites' palette and pixel maps of every sprite in the prompt. Front and back sprites are drawn from about 45 degrees
+    above (their horizontal axis is exactly x; Settings). After every run Seurat projects the model from each sprite's
+    camera at one voxel per pixel and shows the model each sprite next to it with a silhouette diff (red missing, blue
+    extra), match scores and how its size compares; the job panel shows them per round.
   - *With the language model, as a program in fixed rounds*: DeepSeek V4.1 Flash first writes a design brief from what it
     knows about the subject and your description (parts, proportions, positions in 3D, palette; pictures are only
     hints, never traced), then a Python program that builds the
@@ -40,7 +43,7 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
   and Minecraft `.schem` schematics (WorldEdit) can be imported.
 - **Assistants** (MCP, `mcp_server.py`, 29 tools): list/create/edit models with operations (`model_ops`), look at them
   (`model_look` returns a picture, also from the game overworld cameras), compare a model with game sprites from their
-  camera (`model_sprite_match`), add references, build or generate from pictures, follow and cancel generations,
+  camera (`model_sprite_match`), run voxel programs with the sprite tools (`model_program` with `sprites`), add references, build or generate from pictures, follow and cancel generations,
   export, versions, settings.
 
 ## The operation language

@@ -56,7 +56,7 @@ class GetArgs(ModelId):
 
 
 class LookArgs(ModelId):
-    view: Literal[VIEWS] = Field("sheet", description="sheet (six labelled views) or one of front, back, left, right, top, bottom, iso, iso_front_left, iso_back_left, iso_back_right, or a game overworld camera (looking down): overworld_front, overworld_back (45 degrees above), overworld_left, overworld_right (20 degrees above).")
+    view: Literal[VIEWS] = Field("sheet", description="sheet (six labelled views) or one of front, back, left, right, top, bottom, iso, iso_front_left, iso_back_left, iso_back_right, or a game overworld camera (looking down): overworld_front, overworld_back (45 degrees above), overworld_left, overworld_right (true profile).")
     size: Optional[int] = Field(None, ge=1, le=64, description="Pixels per voxel (flat views) or face size (isometric).")
 
 
@@ -70,7 +70,8 @@ class ProgramArgs(BaseModel):
     code: str = Field(..., min_length=10, max_length=60000, description="Python: PALETTE = ['#rrggbb', ...] (index 1 = first) and def build(g) filling g[x, y, z] (numpy uint8, x right, y up, z towards the viewer). Ready: np, math, X, Y, Z, xs/ys/zs, ellipsoid, sphere, capsule, box, polygon, mirror_x, shade_by_height.")
     model_id: str = Field("", max_length=64, description="Replace this model's content (kept as a version); empty = a new model.")
     name: str = Field("", max_length=120)
-    size: Optional[list[int]] = Field(None, min_length=3, max_length=3, description="[X, Y, Z]; default the model's size or settings.new_size.")
+    size: Optional[list[int]] = Field(None, min_length=3, max_length=3, description="[X, Y, Z]; default the model's size, one voxel per sprite pixel with sprites, or settings.new_size.")
+    sprites: list["SpriteRole"] = Field(default_factory=list, max_length=6, description="Game sprites (reference ids with role front, back or side) for the sprite tools: SPRITE_PALETTE, SIDE (Z, Y) = the side sprite in grid coordinates, SIDE_MASK, extrude_side(g, x0, x1, c=None), carve_side(g), paint_side(g, depth=1), paint_view(g, role, depth=1.5).")
 
 
 class RenameArgs(ModelId):
@@ -161,7 +162,7 @@ class GenerateArgs(BaseModel):
     minutes: Optional[int] = Field(None, ge=5, le=600, description="agent: time budget; default from settings.")
     target: Literal["auto", "sprite", "free"] = Field("auto", description="code/agent: sprite = the front/back/side pictures are game sprites to rebuild in 3D (judged from the game camera after every run); free = pictures are loose hints; auto = sprite when they are small pixel art.")
     sprite_pitch: Optional[int] = Field(None, ge=0, le=89, description="Sprite target: degrees above the horizon of the camera of the front and back sprites; default from settings (45).")
-    sprite_side_pitch: Optional[int] = Field(None, ge=0, le=89, description="Sprite target: degrees above the horizon of the camera of the side sprites; default from settings (20).")
+    sprite_side_pitch: Optional[int] = Field(None, ge=0, le=89, description="Sprite target: degrees above the horizon of the camera of the side sprites; default from settings (0: a true profile).")
 
 
 class SpriteRole(BaseModel):
@@ -169,10 +170,13 @@ class SpriteRole(BaseModel):
     role: Literal["front", "back", "side"] = "front"
 
 
+ProgramArgs.model_rebuild()
+
+
 class SpriteMatchArgs(ModelId):
     references: list[SpriteRole] = Field(..., min_length=1, max_length=6, description="The game sprites (reference ids) with what they show: front (facing the camera), back (from behind) or side.")
     sprite_pitch: Optional[int] = Field(None, ge=0, le=89, description="Degrees above the horizon of the camera of the front and back sprites; default from settings (45).")
-    sprite_side_pitch: Optional[int] = Field(None, ge=0, le=89, description="Degrees above the horizon of the camera of the side sprites; default from settings (20).")
+    sprite_side_pitch: Optional[int] = Field(None, ge=0, le=89, description="Degrees above the horizon of the camera of the side sprites; default from settings (0: a true profile).")
 
 
 class JobId(BaseModel):
@@ -390,7 +394,8 @@ TOOLS: list[Tool] = [
                              "no files, no network, a time limit. The program is kept with the model.",
                              "Helpers: ellipsoid, sphere, capsule (tapered tube), box, polygon (flat shape with thickness), mirror_x, shade_by_height; numpy masks over xs, ys, zs.",
                              "programa voxel, código voxel, script"),
-         ProgramArgs, ann(draft_safe=True), lambda s, a: s.run_program(a.code, model_id=a.model_id, name=a.name, size=a.size), timeout_s=120),
+         ProgramArgs, ann(draft_safe=True), lambda s, a: s.run_program(a.code, model_id=a.model_id, name=a.name, size=a.size,
+                                                                       sprites=[r.model_dump() for r in a.sprites]), timeout_s=120),
     Tool("model_ops", _d("Change a model with operations (all-or-nothing): voxel, voxels, box, line, sphere, cylinder, layer "
                          "(pixel rows on the front, side or top plane), recolor, mirror, move, clear. c = palette index, c:0 erases.",
                          "Axes: x right, y up, z towards the viewer. The previous content is kept as a version.",

@@ -52,14 +52,15 @@ def check_source(code: str) -> None:
         raise ProgramError(f"the program uses {m.group(0)!r}, which is not allowed (no files, processes or dunder names)")
 
 
-def run_program(code: str, size: list[int], timeout: float = 60.0) -> ProgramResult:
+def run_program(code: str, size: list[int], timeout: float = 60.0, sprites: Optional[dict] = None) -> ProgramResult:
+    """``sprites``: :func:`spritecam.program_data` for a sprite target (SPRITE_PALETTE, SIDE, carve_side, paint_view...)."""
     check_source(code)
     with tempfile.TemporaryDirectory(prefix="seurat-prog-") as tmp:
         out = os.path.join(tmp, "out.npz")
         env = {k: v for k, v in os.environ.items() if k.upper() in ("SYSTEMROOT", "PATH", "TEMP", "TMP", "HOME", "USERPROFILE")}
         env["OMP_NUM_THREADS"] = "2"
         try:
-            proc = subprocess.run([sys.executable, "-I", str(RUNNER)], input=json.dumps({"code": code, "size": size, "out": out}),
+            proc = subprocess.run([sys.executable, "-I", str(RUNNER)], input=json.dumps({"code": code, "size": size, "out": out, **({"sprites": sprites} if sprites else {})}),
                                   capture_output=True, text=True, timeout=timeout, cwd=tmp, env=env)
         except subprocess.TimeoutExpired:
             raise ProgramError(f"the program ran longer than {timeout:.0f} s and was stopped (vectorise loops with numpy)") from None

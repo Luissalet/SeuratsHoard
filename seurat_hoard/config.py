@@ -30,7 +30,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "agent_minutes": 90,     # time budget per agent generation
     "agent_step_thinking": 30000,  # thinking per agent action (the server caps a call at 32768 with the answer)
     "code_size": 64,         # grid side for code generations (without a size of their own)
-    "program_timeout_s": 60, # time limit for one voxel program
+    "program_timeout_s": 180, # time limit for one voxel program
     "paint_sides": False,    # also paint the side picture on both sides (side sprites rarely match the sculpted side)
     "parallel_jobs": 1,      # generations running at the same time (read at start); one at a time thinks faster
     "llm_url": "",           # empty: the family's model (DeepSeek on the Sparks through Hoard Link); else an OpenAI-compatible URL

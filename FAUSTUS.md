@@ -17,14 +17,18 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
 - Instant models from pictures: inflate, extrude, hull (front + side + optional top).
 - Generations with the language model (`generate_start` → `generate_status`): DeepSeek V4.1 Flash on the Sparks by
   default (resolved through Hoard Link and Faustus's registry, also while Faustus runs on a Spark), or any
-  OpenAI-compatible URL from Settings. By default it reasons at the highest level (effort `max`, 32 000 thinking tokens
-  on top of a 16 000-token answer, one hour per call) and sculpts the shape from parts on an empty grid; Seurat then
+  OpenAI-compatible URL from Settings. By default it reasons at the highest level (effort `max`: up to 100 000 thinking
+  tokens per round, counted exactly from the server's usage; when the thinking reaches that budget, or the server cuts
+  it, a second call without thinking gets the whole reasoning and writes the answer, up to 24 000 tokens) and sculpts the shape from parts on an empty grid; Seurat then
   paints the reference pictures onto the shape (front, back, both sides) after every round, so the model works on
   volume and the colours come from the pictures. Answers are constrained to JSON, streamed (progress while thinking,
   instant cancel, loops in the answer or the thinking cut), and reviewed for rounds with a six-view contact sheet and the
   front-silhouette differences. A round that empties, only clears or destroys most of the model is undone and the model
   is told why. Cut answers keep their complete operations; a failure part-way saves what was built (or the instant
   model when nothing was). Start from auto (empty grid), inflate, hull, extrude, empty or the current model (refine).
+- Generate from a description alone (no pictures): objects, characters or whole scenes in a grid of the given size
+  (`generate_start` with `prompt` and `size`, no references).
+- Run several generations at the same time (`parallel_jobs`, 2 by default).
 - Export `.vox`, `.glb`, `.stl` (mm), PNG of a view, isometric sprite strip; import `.vox`.
 - Software renders (no GPU): flat views, isometric views, labelled contact sheets.
 

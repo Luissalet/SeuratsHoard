@@ -23,7 +23,7 @@ from .services import Services
 from .voxels import OPS, norm_hex
 
 AGENT_INSTRUCTIONS = """Seurat's Hoard is a voxel studio: voxel models (a grid of palette colours, y up, z towards the viewer) that the user draws in a 3D editor, and pictures turned into voxel models.
-Pictures to voxels: reference_add (a PNG/JPG path on this PC, or base64) gives a reference id. build_from_image makes an instant model from it (inflate = puffed-up front, extrude = slab, hull = front + side silhouettes carved). generate_start asks the language model (DeepSeek on the Sparks by default) for a real voxel version: it sees the pictures, writes operations, and reviews its own renders for review rounds; poll generate_status until done, then model_look.
+Pictures to voxels: reference_add (a PNG/JPG path on this PC, or base64) gives a reference id. build_from_image makes an instant model from it (inflate = puffed-up front, extrude = slab, hull = front + side silhouettes carved). generate_start asks the language model (DeepSeek on the Sparks by default, reasoning at length: minutes per round) for a real voxel version: it sees the pictures, sculpts the shape with operations, Seurat paints the pictures onto it, and it reviews its own renders for review rounds; with no pictures, a prompt and a size build an object or a whole scene from the description. Poll generate_status until done, then model_look.
 Editing: model_ops applies operations (voxel, voxels, box, line, sphere, cylinder, layer with pixel rows, recolor, mirror, move, clear; c is a palette index, c:0 erases); model_get shows the palette and bounds. Every change keeps the previous content as a version (model_versions / model_restore).
 model_look returns a picture of a model (sheet = six views, or one view). model_export writes .vox (MagicaVoxel), .glb, .stl (printing, millimetres) or PNG renders / isometric sprites and returns the path."""
 
@@ -136,7 +136,7 @@ class RefRole(BaseModel):
 
 
 class GenerateArgs(BaseModel):
-    references: list[RefRole] = Field(..., min_length=1, max_length=6, description="Pictures with their role; the first front is the main view.")
+    references: list[RefRole] = Field(default_factory=list, max_length=6, description="Pictures with their role; the first front is the main view. Empty: build from the prompt alone (a description of an object or a scene).")
     prompt: str = Field("", max_length=2000, description="What the user wants (style, what it is, what to stress).")
     name: str = Field("", max_length=120)
     into: str = Field("", max_length=64, description="Save as a new version of this model instead of a new model.")
@@ -145,6 +145,7 @@ class GenerateArgs(BaseModel):
     max_side: Optional[int] = Field(None, ge=4, le=128)
     colors: Optional[int] = Field(None, ge=2, le=48)
     depth: int = Field(0, ge=0, le=256)
+    size: Optional[list[int]] = Field(None, min_length=3, max_length=3, description="Grid [x, y, z] when there are no pictures; default from settings (new_size).")
     effort: Optional[Literal["off", "low", "medium", "high", "max"]] = None
     use_model: bool = Field(True, description="false = only the starting model (no language model).")
     auto_paint: Optional[bool] = Field(None, description="Paint the reference pictures onto the sculpted shape after every round; default from settings.")
@@ -160,7 +161,7 @@ class SettingsArgs(BaseModel):
     review_rounds: Optional[int] = Field(None, ge=0, le=6)
     effort: Optional[Literal["off", "low", "medium", "high", "max"]] = None
     max_tokens: Optional[int] = Field(None, ge=1000, le=128000)
-    thinking_tokens: Optional[int] = Field(None, ge=0, le=200000)
+    thinking_tokens: Optional[int] = Field(None, ge=0, le=900000)
     timeout_s: Optional[int] = Field(None, ge=30, le=7200)
     auto_paint: Optional[bool] = None
     parallel_jobs: Optional[int] = Field(None, ge=1, le=6, description="Generations at the same time (after a restart).")
@@ -366,7 +367,7 @@ TOOLS: list[Tool] = [
                                 "extrude (slab) or hull (front + side silhouettes carved).", synonyms="convertir a voxel rápido"),
          BuildArgs, ann(draft_safe=True), _build, timeout_s=120),
     Tool("generate_start", _d("Ask the language model (DeepSeek on the Sparks by default) for a voxel version of one or more "
-                              "pictures. It sees them, sculpts the shape with operations (ellipsoids, capsules, wing prisms), Seurat paints the "
+                              "pictures, or of a description alone (objects, characters, whole scenes). It sees the pictures, sculpts the shape with operations (ellipsoids, capsules, wing prisms), Seurat paints the "
                               "pictures onto it, and it reviews its own renders. With effort max a round takes several minutes. Returns a job id.",
                               "Roles: front (main), side (seen from the model's left), top, back, extra.",
                               "generar voxel, deepseek, versión voxel de una imagen"),

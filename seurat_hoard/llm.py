@@ -34,6 +34,9 @@ class Answer:
     finish: str = ""            # stop | length | loop | cancelled | ""
     reasoning_chars: int = 0
     seconds: float = 0.0
+    reasoning: str = ""         # the thinking itself, when the server streams it
+    reasoning_tokens: int = 0   # streamed thinking chunks (about one token each)
+    followed_up: bool = False   # the answer came from a second call that reused the thinking
 
 
 def _looping(text: str, window: int = 2000) -> bool:
@@ -125,14 +128,47 @@ class ModelClient:
                     body[key] = thinking_tokens
         if json_mode:
             body["response_format"] = {"type": "json_object"}     # constrains the answer, not the thinking
+        # exact token counts while streaming (SGLang/vLLM); other servers ignore the second key
+        body["stream_options"] = {"include_usage": True, "continuous_usage_stats": True}
+        budget = thinking_tokens if thinking and thinking_tokens > 0 else 0
+        if budget:
+            body["max_tokens"] = max_tokens + budget + 2000              # the budget is enforced while streaming
+        answer = self._send(url, body, timeout, on_progress, cancel, budget)
+        if thinking and answer.finish != "cancelled" and answer.reasoning and "{" not in answer.text:
+            # The thinking used the whole budget (or the server cut it) before any answer: ask again WITHOUT thinking,
+            # handing the model its own reasoning, so the minutes of planning turn into operations.
+            follow = self._follow_up(body, answer.reasoning, max_tokens)
+            second = self._send(url, follow, timeout, on_progress, cancel, 0)
+            return Answer(second.text, second.model or answer.model, second.finish, len(answer.reasoning),
+                          answer.seconds + second.seconds, answer.reasoning, answer.reasoning_tokens, True)
+        return answer
+
+    def _send(self, url, body, timeout, on_progress, cancel, budget) -> Answer:
         try:
-            return self._stream(url, body, timeout, on_progress, cancel)
+            return self._stream(url, body, timeout, on_progress, cancel, budget)
         except _RetryWithoutReasoning:
             _reasoning.strip(body)
-            return self._stream(url, body, timeout, on_progress, cancel)
+            return self._stream(url, body, timeout, on_progress, cancel, 0)
         except _RetryWithoutJson:
             body.pop("response_format", None)
-            return self._stream(url, body, timeout, on_progress, cancel)
+            return self._stream(url, body, timeout, on_progress, cancel, budget)
+
+    @staticmethod
+    def _follow_up(body: dict[str, Any], reasoning: str, max_tokens: int) -> dict[str, Any]:
+        keep = 120_000                                   # characters of thinking handed back (its start and its end)
+        if len(reasoning) > keep:
+            reasoning = reasoning[: keep // 3] + "\n[...]\n" + reasoning[-(keep * 2 // 3):]
+        follow = {k: v for k, v in body.items() if k not in ("messages", "max_tokens", "thinking_budget_tokens",
+                                                              "reasoning_budget", "reasoning_effort", "chat_template_kwargs")}
+        follow["messages"] = list(body["messages"]) + [
+            {"role": "assistant", "content": "My reasoning so far (private notes, not the answer):\n" + reasoning},
+            {"role": "user", "content": "Your thinking ran out of room. Using the plan in your notes above, write the final "
+                                        "answer NOW: ONE JSON object exactly as the instructions say, nothing else. Keep it "
+                                        "compact; if the plan was not finished, decide the remaining parts quickly."}]
+        follow["max_tokens"] = max_tokens
+        follow["temperature"] = 0.3
+        follow["chat_template_kwargs"] = {"enable_thinking": False}
+        return follow
 
     def _via_link(self, system, user, images, max_tokens, effort, timeout) -> Answer:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -144,10 +180,11 @@ class ModelClient:
             raise SeuratError("no_model", f"The model did not answer: {type(exc).__name__}: {exc}"[:500]) from None
         return Answer(res.text or "", res.model or "", getattr(res, "finish_reason", "") or "", 0, time.time() - t0)
 
-    def _stream(self, url: str, body: dict[str, Any], timeout: float, on_progress, cancel) -> Answer:
+    def _stream(self, url: str, body: dict[str, Any], timeout: float, on_progress, cancel, budget: int = 0) -> Answer:
         t0 = time.time()
         text, reasoning, finish, model = [], [], "", body.get("model") or ""
-        n_text = n_reason = 0
+        n_text = n_reason = t_text = t_reason = 0
+        exact = False               # token counts from the server's usage (else: one per streamed chunk)
         last_report = 0.0
         try:
             with httpx.stream("POST", url, json=body, timeout=httpx.Timeout(timeout, connect=15.0)) as r:
@@ -172,21 +209,31 @@ class ModelClient:
                     except ValueError:
                         continue
                     model = chunk.get("model") or model
+                    usage = chunk.get("usage") or {}
+                    if usage.get("completion_tokens") is not None:
+                        exact = True
+                        rt = int(usage.get("reasoning_tokens") or 0)
+                        t_reason, t_text = rt, max(0, int(usage["completion_tokens"]) - rt)
                     for choice in chunk.get("choices") or []:
                         delta = choice.get("delta") or {}
                         if delta.get("content"):
                             text.append(delta["content"])
                             n_text += len(delta["content"])
+                            t_text += 0 if exact else 1
                         rc = delta.get("reasoning_content") or delta.get("reasoning")
                         if rc:
                             reasoning.append(rc)
                             n_reason += len(rc)
+                            t_reason += 0 if exact else 1
                         if choice.get("finish_reason"):
                             finish = choice["finish_reason"]
                     now = time.time()
                     if on_progress and now - last_report > 1.0:
                         last_report = now
-                        on_progress(n_text, n_reason)
+                        on_progress(t_text, t_reason)
+                    if budget and t_reason >= budget and not n_text:
+                        finish = "think_budget"   # enough thinking: the answer is asked for separately
+                        break
                     if n_text > 2000 and len(text) % 25 == 0 and _looping("".join(text[-400:])):
                         finish = "loop"
                         break
@@ -200,8 +247,8 @@ class ModelClient:
             raise SeuratError("no_model", f"{url} did not answer: {type(exc).__name__}: {exc}"[:400],
                               "Check that the Sparks are serving (Prometheus).") from None
         if on_progress:
-            on_progress(n_text, n_reason)
-        return Answer("".join(text), model, finish, n_reason, time.time() - t0)
+            on_progress(t_text, t_reason)
+        return Answer("".join(text), model, finish, n_reason, time.time() - t0, "".join(reasoning), t_reason)
 
 
 class _RetryWithoutReasoning(Exception):

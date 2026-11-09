@@ -101,7 +101,7 @@
         </div>
 
         <label class="field">
-          <span>Qué quieres</span>
+          <span>Qué quieres <small>(sin referencias, describe el objeto o la escena)</small></span>
           <textarea id="gen-prompt" rows="3" maxlength="2000" placeholder="Ej.: un slime verde y redondo, con brillo arriba y la espalda más oscura"></textarea>
         </label>
 
@@ -220,7 +220,7 @@
               <option value="high">Alto</option><option value="max">Máximo</option>
             </select></label>
           <label class="srow"><span>Tokens máximos por respuesta <small>(sin contar el razonamiento)</small></span><input type="number" name="max_tokens" min="1000" max="128000" step="1000"></label>
-          <label class="srow"><span>Tokens para razonar <small>(se suman a la respuesta)</small></span><input type="number" name="thinking_tokens" min="0" max="200000" step="1000"></label>
+          <label class="srow"><span>Tokens para razonar <small>(se suman a la respuesta)</small></span><input type="number" name="thinking_tokens" min="0" max="900000" step="1000"></label>
           <label class="srow"><span>Tiempo límite por llamada (s)</span><input type="number" name="timeout_s" min="30" max="7200" step="10"></label>
           <label class="srow"><span>Pintar las referencias sobre la forma</span><input type="checkbox" name="auto_paint"></label>
           <label class="srow"><span>Generaciones a la vez <small>(al reiniciar)</small></span><input type="number" name="parallel_jobs" min="1" max="6" step="1"></label>

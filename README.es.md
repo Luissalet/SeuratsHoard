@@ -17,6 +17,8 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
     rondas que elijas. Una ronda que vaciaría o destrozaría el modelo se deshace. Cada ronda se ve con su render,
     sus notas y sus errores; las respuestas se guardan como texto junto a los renders. Papel de cada imagen: frente,
     lado, arriba, detrás, extra.
+  - *Solo con una descripción* (sin imágenes): el modelo construye un objeto, un personaje o una escena entera a partir
+    del texto, en una cuadrícula del tamaño elegido y con las mismas rondas de revisión.
   - El pixel art ampliado por un factor entero se lee a su tamaño real; un fondo de un solo color pasa a transparente.
 - **Exportar**: `.vox` (MagicaVoxel 150, ida y vuelta), `.glb` (colores por vértice, mallado agrupado), `.stl` binario
   en milímetros (malla cerrada, z arriba, ajuste `voxel_mm`), PNG de cualquier vista y una tira de sprites isométricos

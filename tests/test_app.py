@@ -176,3 +176,32 @@ def test_a_model_failure_keeps_the_starting_model(app_client):
     st = c.get(f"/api/jobs/{job['job_id']}").json()
     assert st["status"] == "done" and st["model_id"] and "spark down" in st["warning"]
     assert c.get(f"/api/models/{st['model_id']}").json()["count"] > 100
+
+
+def test_generation_from_a_description_alone(app_client):
+    c, svc, link = app_client
+    bad = c.post("/api/generate", json={"references": []})
+    assert bad.status_code >= 400
+    job = c.post("/api/generate", json={"prompt": "a small red mushroom house on a grass tile", "rounds": 1,
+                                        "size": [24, 24, 24]}).json()
+    st = c.get(f"/api/jobs/{job['job_id']}").json()
+    assert st["status"] == "done", st
+    model = c.get(f"/api/models/{st['model_id']}").json()
+    assert model["size"] == [24, 24, 24] and model["name"].startswith("a small red mushroom")
+    user = link.calls[0]["messages"][1]["content"]
+    assert "no pictures" in user and "mushroom" in user and not link.calls[0]["images"]
+
+
+def test_cancel_before_anything_is_built_saves_nothing(app_client):
+    c, svc, link = app_client
+    before = len(c.get("/api/models").json()["models"])
+
+    def cancelled(*a, **kw):
+        job = next(iter(svc.generator.jobs.values()))
+        job.cancel.set()
+        raise RuntimeError("cut")
+
+    link.sync.chat = cancelled
+    job = c.post("/api/generate", json={"prompt": "a tree", "rounds": 0, "size": [16, 16, 16]}).json()
+    st = c.get(f"/api/jobs/{job['job_id']}").json()
+    assert not st["model_id"] and len(c.get("/api/models").json()["models"]) == before

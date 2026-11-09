@@ -270,3 +270,16 @@ def test_program_sandbox_limits():
     assert "longer than" in e.value.message
     res = run_program("PALETTE=['#fff','#000']\ndef build(g):\n    box(g, 2, (0,0,0), (1,1,1))\n    g[3,3,3] = 9\n", [4, 4, 4])
     assert res.count == 8 and res.grid[3, 3, 3] == 0      # index 9 has no colour: dropped
+
+
+def test_model_program_tool(app_client):
+    c, svc, link = app_client
+    code = "PALETTE = ['#aa3322']\ndef build(g):\n    sphere(g, 1, (X/2, Y/2, Z/2), 4)\n"
+    r = c.post("/api/ui/call", json={"name": "model_program", "arguments": {"code": code, "name": "Bola", "size": [12, 12, 12]}})
+    out = r.json()
+    res = out.get("result", out)
+    assert res["count"] > 100 and res["name"] == "Bola"
+    m = c.get(f"/api/models/{res['id']}").json()
+    assert m["source"]["program"] == code
+    bad = c.post("/api/ui/call", json={"name": "model_program", "arguments": {"code": "PALETTE=['#fff']\ndef build(g):\n    import os\n"}}).json()
+    assert "not allowed" in json.dumps(bad)

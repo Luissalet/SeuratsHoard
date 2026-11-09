@@ -410,6 +410,9 @@ class Generator:
                 model = builders.build(start, front, side=side, top=top, depth=depth, name=name, base_palette=palette)
             if depth and model.size[2] < depth:
                 model.resize([model.size[0], model.size[1], depth])
+        if method == "code" and not into:
+            # Each working program is saved as it comes, so a crash or a restart part-way loses nothing.
+            model.id, model.name = self.svc.store.new_id(), name
         job.say(f"modelo inicial: {start}, {model.size[0]}x{model.size[1]}x{model.size[2]}, {model.count} voxels")
         self._record(job, 0, "inicio: " + start, {"applied": 0, "errors": []}, model)
 
@@ -450,7 +453,8 @@ class Generator:
                              "method": method, **({"program": program} if program else {}), **({"brief": job.brief} if job.brief else {})}
             saved = self.svc.store.save(target, version_note="before generation " + job.id)
         else:
-            model.id = self.svc.store.new_id()
+            if not model.id or model.id == "tmp":
+                model.id = self.svc.store.new_id()
             model.name = name
             model.source = {"kind": "generated", "mode": start, "references": [r["id"] for r in p["references"]],
                             "prompt": p.get("prompt") or "", "llm": llm_name, "rounds": len(job.rounds) - 1, "job": job.id,
@@ -683,6 +687,11 @@ class Generator:
                         good_code = code
                         result["applied"] = 1
                         job.say(f"ronda {rnd}: {res.count} voxels, {len(res.palette)} colores")
+                        if model.id and model.id != "tmp" and not p.get("into"):
+                            model.source = {**model.source, "kind": "generated", "method": "code", "job": job.id,
+                                            "brief": job.brief, "prompt": p.get("prompt") or "", "partial": True}
+                            self.svc.store.save(model, version_note=f"generation {job.id} round {rnd}")
+                            job.model_id, job.model_name = model.id, model.name
             self._record(job, rnd, notes, result, model)
             if rnd == total:
                 break

@@ -66,6 +66,13 @@ class OpsArgs(ModelId):
     note: str = Field("", max_length=200, description="What this change is (kept with the previous version).")
 
 
+class ProgramArgs(BaseModel):
+    code: str = Field(..., min_length=10, max_length=60000, description="Python: PALETTE = ['#rrggbb', ...] (index 1 = first) and def build(g) filling g[x, y, z] (numpy uint8, x right, y up, z towards the viewer). Ready: np, math, X, Y, Z, xs/ys/zs, ellipsoid, sphere, capsule, box, polygon, mirror_x, shade_by_height.")
+    model_id: str = Field("", max_length=64, description="Replace this model's content (kept as a version); empty = a new model.")
+    name: str = Field("", max_length=120)
+    size: Optional[list[int]] = Field(None, min_length=3, max_length=3, description="[X, Y, Z]; default the model's size or settings.new_size.")
+
+
 class RenameArgs(ModelId):
     name: str = Field(..., min_length=1, max_length=120)
 
@@ -339,6 +346,11 @@ TOOLS: list[Tool] = [
          GetArgs, ann(read_only=True), lambda s, a: _summary(s, a.model_id, a.voxels)),
     Tool("model_look", _d("See a model: returns a picture (sheet = six labelled views, or one view).", synonyms="ver modelo, render"),
          LookArgs, ann(read_only=True), _look, timeout_s=60, capped=False),
+    Tool("model_program", _d("Build a model by running a voxel program (Python with numpy: PALETTE + build(g)) in a sandbox: "
+                             "no files, no network, a time limit. The program is kept with the model.",
+                             "Helpers: ellipsoid, sphere, capsule (tapered tube), box, polygon (flat shape with thickness), mirror_x, shade_by_height; numpy masks over xs, ys, zs.",
+                             "programa voxel, código voxel, script"),
+         ProgramArgs, ann(draft_safe=True), lambda s, a: s.run_program(a.code, model_id=a.model_id, name=a.name, size=a.size), timeout_s=120),
     Tool("model_ops", _d("Change a model with operations (all-or-nothing): voxel, voxels, box, line, sphere, cylinder, layer "
                          "(pixel rows on the front, side or top plane), recolor, mirror, move, clear. c = palette index, c:0 erases.",
                          "Axes: x right, y up, z towards the viewer. The previous content is kept as a version.",

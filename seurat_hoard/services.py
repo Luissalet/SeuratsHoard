@@ -51,6 +51,28 @@ class Services:
         self.store.save(model, version_note=note or f"{len(ops)} operations")
         return {**result, "id": model.id, "bounds": model.bounds(), "size": model.size}
 
+    def run_program(self, code: str, *, model_id: str = "", name: str = "", size: Optional[Iterable[int]] = None) -> dict[str, Any]:
+        """Run a voxel program (PALETTE + build(g), see program.py) into a model: an existing one (its grid and palette
+        are replaced, the previous content stays as a version) or a new one."""
+        from .program import ProgramError, run_program
+        if model_id:
+            model = self.store.get(model_id)
+            dims = list(size) if size else model.size
+        else:
+            dims = list(size or self.settings["new_size"])
+            model = VoxelModel.empty(self.store.new_id(), (name or "Programa").strip()[:120], dims)
+        try:
+            res = run_program(code, [int(v) for v in dims], timeout=float(self.settings["program_timeout_s"]))
+        except ProgramError as exc:
+            raise SeuratError("program_failed", f"The program failed: {exc.message}", exc.trace[-800:] or None) from None
+        model.grid, model.palette = res.grid, res.palette
+        model.source = {**(model.source or {}), "program": code}
+        if name and model_id:
+            model.name = name.strip()[:120]
+        saved = self.store.save(model, version_note="program")
+        return {"id": saved.id, "name": saved.name, "count": saved.count, "size": saved.size, "colors": len(saved.palette),
+                "bounds": saved.bounds()}
+
     def replace(self, model_id: str, data: dict[str, Any]) -> VoxelModel:
         """Full content from the editor (voxels, palette, size, name)."""
         current = self.store.get(model_id)

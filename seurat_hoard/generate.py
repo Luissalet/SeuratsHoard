@@ -161,7 +161,12 @@ WHAT MAKES IT GOOD
 - Understand the subject, do not trace pictures. Work from the written description, the DESIGN BRIEF and what you know
   about the subject (a known character, animal, building or object: recall its real anatomy, proportions, colours and
   characteristic details). Pictures, when there are any, are loose hints for colours and markings; never copy them
-  pixel by pixel or as projections (game sprites are tiny, drawn from above at an angle and squashed).
+  pixel by pixel or as projections (game sprites are tiny, drawn from above at an angle and squashed). EXCEPTION: when a
+  picture is itself a voxel build (blocks you can see), it is the STYLE AND QUALITY TARGET: reproduce how it is built
+  (pose, proportions, scale, stepped rows of feathers or scales, colour bands, how parts overlap) at your grid's scale.
+- Large organic parts are built like voxel artists do: wings as overlapping rows of feather blocks stepped like stairs,
+  each row a colour band (base colour, then a light band, then the tips); tails as fans of long tapered feathers; necks
+  as smooth S-curves of tapered capsules; heads with clear eyes (white with a dark pupil), beak and crest.
 - A clear pose that fits the grid (for a flying creature: wings spread wide, slightly raised).
 
 ANSWER: ONE JSON object {"notes": "what you built, in one or two sentences", "code": "<the complete program>"}"""

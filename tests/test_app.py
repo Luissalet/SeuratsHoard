@@ -384,3 +384,50 @@ def test_model_program_with_sprite_tools(app_client, tmp_path):
         "code": "PALETTE = SPRITE_PALETTE\ndef build(g):\n    extrude_side(g, X//2-2, X//2+2)\n",
         "name": "perfil", "sprites": [{"id": ref["id"], "role": "side"}]}}, headers=head).json()
     assert res["count"] > 100 and res["size"][2] >= 16, res
+
+
+class BestLink(FakeLink):
+    """A sprite agent whose second run is worse than its first: the first is kept."""
+
+    def chat(self, messages, images=None, **kw):
+        if messages[0]["content"].startswith("You are a voxel art director"):
+            return SimpleNamespace(text=json.dumps({"brief": "The sprite in 3D."}), model="deepseek-v4.1-flash")
+        self.calls.append({"messages": messages, "images": images or [], **kw})
+        n = len(self.calls)
+        good = "PALETTE = SPRITE_PALETTE\ndef build(g):\n    extrude_side(g, X//2-3, X//2+3)\n"
+        bad = "PALETTE = SPRITE_PALETTE\ndef build(g):\n    box(g, 1, (0, 0, 0), (2, 2, 2))\n"
+        answers = [{"action": "run", "notes": "good", "code": good}, {"action": "run", "notes": "worse", "code": bad},
+                   {"action": "done", "notes": "stop"}]
+        return SimpleNamespace(text=json.dumps(answers[min(n, 3) - 1]), model="deepseek-v4.1-flash")
+
+
+def test_sprite_agent_keeps_the_best_version_and_can_continue(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from seurat_hoard.config import Config
+    from seurat_hoard.main import create_app
+    from seurat_hoard.services import Services
+
+    cfg = Config(data_dir=tmp_path / "data", port=5250, data_dir_configured=True, background=False)
+    link = BestLink()
+    svc = Services(cfg, link_factory=lambda: link)
+    with TestClient(create_app(cfg, services=svc), base_url="http://127.0.0.1:5250", client=("127.0.0.1", 50000)) as c:
+        side = c.post("/api/references?name=side", content=sprite_png(), headers={"Content-Type": "image/png"}).json()["id"]
+        refs = [{"id": side, "role": "side"}]
+        st = c.get(f"/api/jobs/{c.post('/api/generate', json={'references': refs, 'method': 'agent', 'steps': 5}).json()['job_id']}").json()
+        assert st["status"] == "done", st
+        worse = link.calls[2]["messages"][-1]["content"]
+        worse = worse[0]["text"] if isinstance(worse, list) else worse
+        assert "WORSE than your best" in worse
+        assert any("mejor versión" in l["text"] for l in st["log"])
+        model = c.get(f"/api/models/{st['model_id']}").json()
+        assert "extrude_side" in model["source"]["program"] and model["count"] > 100
+        # carry on from that model: no new brief, the program comes in the first message
+        link.calls.clear()
+        job = c.post("/api/generate", json={"references": refs, "method": "agent", "steps": 3, "continue_from": st["model_id"]}).json()
+        st2 = c.get(f"/api/jobs/{job['job_id']}").json()
+        assert st2["status"] == "done" and st2["model_id"] == st["model_id"], st2
+        first = link.calls[0]["messages"][-1]["content"]
+        first = first[0]["text"] if isinstance(first, list) else first
+        assert "CONTINUING" in first and "extrude_side" in first and any("se continúa" in l["text"] for l in st2["log"])
+        assert c.get(f"/api/models/{st['model_id']}").json()["count"] == model["count"]   # the worse run did not stick

@@ -226,7 +226,7 @@ function renderGenRefs() {
   box.replaceChildren();
   const used = usedReferences();
   if (!used.length) {
-    box.append(el('div', { class: 'empty' }, 'Ninguna referencia elegida. ', el('a', { href: '#', 'data-goto': 'refs', text: 'Sube o elige una' }), '.'));
+    box.append(el('div', { class: 'empty' }, 'Ninguna referencia elegida: se construirá solo con la descripción (un objeto o una escena). ', el('a', { href: '#', 'data-goto': 'refs', text: 'Sube o elige una' }), '.'));
   }
   used.forEach((r, i) => {
     const row = el('div', { class: 'gen-ref' },
@@ -269,12 +269,14 @@ function genParams() {
     max_side: parseInt($('gen-size').value, 10),
     colors: parseInt($('gen-colors').value, 10),
     effort: $('gen-effort').value,
+    ...(used.length ? {} : { size: Array(3).fill(parseInt($('gen-size').value, 10)) }),
   };
 }
 
 async function startGeneration(params) {
   params = params || genParams();
-  if (!params.references.length) { toast('Elige al menos una referencia (pestaña Referencias).', 'err'); return; }
+  if (!params.references.length && !params.prompt) { toast('Elige una referencia (pestaña Referencias) o describe qué construir.', 'err'); return; }
+  if (!params.references.length && !['auto', 'empty', 'current'].includes(params.start)) params.start = 'auto';
   if (job.data && (job.data.status === 'running' || job.data.status === 'queued')) {
     toast('Ya hay una generación en marcha.', 'err'); return;
   }

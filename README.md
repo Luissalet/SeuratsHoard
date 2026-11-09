@@ -15,6 +15,8 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
     its own result (six views, front-silhouette differences, operation errors) for as many rounds as you choose. A round
     that would empty or wreck the model is undone. Every round is shown with its render, notes and errors; the
     answers are kept as text next to the renders. Roles per picture: front, side, top, back, extra.
+  - *From a description alone* (no pictures): the model builds an object, a character or a whole scene from the prompt
+    in a grid of the chosen size, with the same review rounds.
   - Pixel art enlarged by an integer factor is read at its real size; a flat background colour becomes transparent.
 - **Exports**: `.vox` (MagicaVoxel 150, round trip), `.glb` (vertex colours, greedy-meshed), binary `.stl` in millimetres
   (closed mesh, z up, setting `voxel_mm`), PNG of any view, and an isometric sprite strip from four sides. `.vox` files

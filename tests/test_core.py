@@ -277,3 +277,47 @@ def test_destructive_guard_and_auto_paint():
     assert m.grid[1, 1, 4] == 2           # front surface red
     assert m.grid[0, 1, 2] == 3           # left side blue (z=2 is column 2)
     assert m.grid[1, 1, 2] == 1           # inside untouched
+
+
+def test_thinking_budget_then_answer_from_the_reasoning(monkeypatch):
+    import contextlib, json as _json
+    import httpx
+    from seurat_hoard import llm as L
+
+    calls = []
+
+    class Resp:
+        status_code = 200
+
+        def __init__(self, lines):
+            self._lines = lines
+
+        def iter_lines(self):
+            yield from self._lines
+
+        def read(self):
+            return b""
+
+    @contextlib.contextmanager
+    def fake_stream(method, url, json=None, timeout=None):
+        calls.append(json)
+        if json["chat_template_kwargs"].get("enable_thinking"):
+            lines = ["data: " + _json.dumps({"choices": [{"delta": {"reasoning_content": "plan step %d. " % i}}]}) for i in range(50)]
+        else:
+            chunk = {"model": "m", "choices": [{"delta": {"content": '{"ops": []}'}, "finish_reason": "stop"}]}
+            lines = ["data: " + _json.dumps(chunk), "data: [DONE]"]
+        yield Resp(lines)
+
+    monkeypatch.setattr(httpx, "stream", fake_stream)
+
+    class S(dict):
+        pass
+    client = L.ModelClient(S(llm_url="http://x/v1", llm_model="m"))
+    seen = []
+    ans = client.chat("sys", "user", [], max_tokens=1000, effort="max", timeout=60, thinking_tokens=20,
+                      on_progress=lambda t, r: seen.append((t, r)))
+    assert ans.followed_up and ans.text == '{"ops": []}' and ans.reasoning_tokens == 20
+    assert len(calls) == 2
+    follow = calls[1]
+    assert follow["chat_template_kwargs"] == {"enable_thinking": False} and "plan step 0." in follow["messages"][-2]["content"]
+    assert follow["max_tokens"] == 1000 and calls[0]["max_tokens"] == 1000 + 20 + 2000

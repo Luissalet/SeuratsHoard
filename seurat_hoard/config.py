@@ -21,9 +21,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "colors": 16,            # colours kept from a reference
     "review_rounds": 3,      # correction rounds after the first answer (the model sees its own result)
     "effort": "max",         # how hard the model reasons: off, low, medium, high, max (above off, rounds take minutes)
-    "max_tokens": 16000,     # longest answer per round, not counting the thinking
-    "thinking_tokens": 32000,  # room for the thinking on top of the answer (effort above off)
-    "timeout_s": 3600,       # per model call
+    "max_tokens": 24000,     # longest answer per round, not counting the thinking
+    "thinking_tokens": 100000,  # thinking per round before the answer is asked for (effort above off)
+    "timeout_s": 7200,       # per model call
     "auto_paint": True,      # after the model shapes the volume, paint the reference pictures onto it
     "parallel_jobs": 2,      # generations running at the same time (read at start)
     "llm_url": "",           # empty: the family's model (DeepSeek on the Sparks through Hoard Link); else an OpenAI-compatible URL
@@ -123,7 +123,7 @@ def normalize(data: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("effort must be off, low, medium, high or max")
     data["max_tokens"] = _clamp(data["max_tokens"], 1000, 128000)
     data["timeout_s"] = _clamp(data["timeout_s"], 30, 7200)
-    data["thinking_tokens"] = _clamp(data["thinking_tokens"], 0, 200000)
+    data["thinking_tokens"] = _clamp(data["thinking_tokens"], 0, 900000)
     data["auto_paint"] = bool(data["auto_paint"])
     data["parallel_jobs"] = _clamp(data["parallel_jobs"], 1, 6)
     data["llm_url"] = str(data.get("llm_url") or "").strip()

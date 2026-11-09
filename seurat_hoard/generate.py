@@ -29,7 +29,7 @@ from .errors import SeuratError
 from .hoard_link.ids import new_id
 from .images import Indexed, index_picture, to_png
 from .llm import ModelClient, parse_json
-from .palette import merge
+from .palette import DEFAULT_PALETTE, merge
 from .render import ortho, png_bytes, sheet
 from .voxels import KEY_CHARS, MAX_SIDE, VoxelModel, apply_ops, norm_hex
 
@@ -98,11 +98,14 @@ PAINT_AUTO = ("Seurat paints the reference pictures onto your shape automaticall
               "the front, back picture on the back, side picture on both sides), so your job is the SHAPE: the volume, "
               "the silhouette from every side and the colour of each part. You only need paint for details the pictures "
               "cannot give (underside, top).")
+PAINT_TEXT = ("There are no reference pictures: build from the description. Give every part its own palette colour, "
+              "with darker shades on the undersides and the back, and add small details (eyes, windows, patterns) with "
+              "paint or single voxels. For a scene, lay out a ground first, then the objects on it, each from parts.")
 PAINT_SELF = ("Colour comes after the shape: once the volume is right, use paint with the reference rows to put the face "
               "and the details on the curved surface, and darker shades on the back and the underside.")
 
-REVIEW = """Review round {round} of {rounds}. The first picture(s) are the reference; the last picture is a contact sheet
-of the CURRENT model (front, left, top, back flat views and two isometric views; labels on each tile).
+REVIEW = """Review round {round} of {rounds}. The first picture(s) are the references (if any); the last picture is a
+contact sheet of the CURRENT model (front, left, top, back flat views and two isometric views; labels on each tile).
 
 Current model: size {size}, {count} voxels, bounds {bounds}.
 {guard}{silhouette}
@@ -176,7 +179,13 @@ class Generator:
     def submit(self, params: dict[str, Any]) -> Job:
         refs = params.get("references") or []
         if not refs:
-            raise SeuratError("invalid", "Give at least one reference picture.", "Upload a PNG first (reference_add) and pass its id.")
+            if not str(params.get("prompt") or "").strip():
+                raise SeuratError("invalid", "Give a reference picture or describe what to build.",
+                                  "Upload a PNG first (reference_add) and pass its id, or write a prompt.")
+            if params.get("use_model") is False:
+                raise SeuratError("invalid", "Without pictures only the language model can build: use_model must be true.")
+            if (params.get("start") or "auto") not in ("auto", "empty", "current"):
+                raise SeuratError("invalid", "Without pictures start can only be auto, empty or current.")
         for r in refs:
             self.svc.store.reference(r["id"])
         if params.get("into"):
@@ -259,12 +268,12 @@ class Generator:
             raw = self.svc.store.reference_bytes(r["id"])
             ix = index_picture(raw, max_side=max_side, colors=colors)
             refs.setdefault(role, []).append((meta, ix, to_png(raw, 1024)))
-        if "front" not in refs:
+        if refs and "front" not in refs:
             first_role = next(iter(refs))
             refs["front"] = [refs[first_role].pop(0)]
             if not refs[first_role]:
                 refs.pop(first_role)
-        front = refs["front"][0][1]
+        front = refs["front"][0][1] if refs else None
         side = refs.get("side", [(None, None, None)])[0][1]
         top = refs.get("top", [(None, None, None)])[0][1]
 
@@ -278,6 +287,8 @@ class Generator:
             r, g, b = (int(c[i: i + 2], 16) for i in (1, 3, 5))
             shades.append("#%02x%02x%02x" % (int(r * 0.68), int(g * 0.68), int(b * 0.72)))
         palette, _ = merge(palette, shades + ["#151317", "#3a3640", "#8a8590", "#e8e4ea"], limit=len(KEY_CHARS))
+        if not refs:
+            palette = list(DEFAULT_PALETTE[: len(KEY_CHARS)])
 
         # ---- starting model
         start = p.get("start") or "auto"
@@ -285,7 +296,10 @@ class Generator:
         if start not in STARTS:
             raise SeuratError("invalid", f"start must be one of {', '.join(STARTS)}.")
         depth = int(p.get("depth") or 0)
-        name = (p.get("name") or "").strip() or (refs["front"][0][0].get("name") or "Modelo") + " (voxel)"
+        if refs:
+            name = (p.get("name") or "").strip() or (refs["front"][0][0].get("name") or "Modelo") + " (voxel)"
+        else:
+            name = (p.get("name") or "").strip() or str(p.get("prompt")).strip().split("\n")[0][:60]
         into = p.get("into") or ""
         if start == "current":
             model = self.svc.store.get(into)
@@ -293,9 +307,12 @@ class Generator:
         else:
             if start == "auto":
                 # The model sculpts from nothing: the instant builders make flat slabs from angled sprites.
-                fallback = "hull" if side is not None else "inflate"
+                fallback = ("hull" if side is not None else "inflate") if front is not None else ""
                 start = "empty" if use_model else fallback
-            if start == "empty":
+            if start == "empty" and front is None:
+                size = [min(MAX_SIDE, max(4, int(v))) for v in (p.get("size") or settings["new_size"])]
+                model = VoxelModel.empty("tmp", name, size, palette)
+            elif start == "empty":
                 d = depth or (side.width if side is not None else max(4, round(max(front.width, front.height) * 0.8)))
                 h = max(front.height, side.height if side is not None else 0)
                 model = VoxelModel.empty("tmp", name, [front.width, h, min(d, MAX_SIDE)], palette)
@@ -311,7 +328,9 @@ class Generator:
             try:
                 llm_name = self._model_rounds(job, model, refs, rounds, start, p)
             except SeuratError as exc:
-                if model.count == 0 and fallback:
+                if job.cancel.is_set():
+                    pass                      # cancelled mid-call: handled below
+                elif model.count == 0 and fallback:
                     model = builders.build(fallback, front, side=side, top=top, depth=depth, name=name, base_palette=palette)
                     start = fallback
                     self._record(job, len(job.rounds), "sin modelo: " + fallback, {"applied": 0, "errors": []}, model)
@@ -323,6 +342,9 @@ class Generator:
                         + (f" (o, si no había nada, el modelo instantáneo «{fallback}»)" if fallback else ""))
         job.llm = llm_name
         if job.cancel.is_set():
+            if model.count == 0 and start != "current":
+                job.say("cancelado antes de construir nada: no se guarda ningún modelo")
+                return model
             job.say("cancelado: se guarda lo que había")
 
         # ---- save
@@ -368,7 +390,7 @@ class Generator:
         thinking_tokens = int(settings["thinking_tokens"])
         timeout = float(settings["timeout_s"])
         auto_paint = bool(settings["auto_paint"] if p.get("auto_paint") is None else p["auto_paint"])
-        paint_rule = PAINT_AUTO if auto_paint else PAINT_SELF
+        paint_rule = (PAINT_AUTO if auto_paint else PAINT_SELF) if refs else PAINT_TEXT
         system = SYSTEM.replace("{paint_rule}", paint_rule)
         ref_images = [img for role in ROLES for _, _, img in refs.get(role, [])][:4]
         text = self._first_prompt(model, refs, start, p)
@@ -385,8 +407,8 @@ class Generator:
             job.say(label)
 
             def progress(n_text: int, n_reason: int, label=label) -> None:
-                job.step = f"{label} · " + (f"pensando ~{n_reason // 4} tokens" if n_reason and not n_text else
-                                            f"recibidos ~{n_text // 4} tokens" + (f" (tras pensar ~{n_reason // 4})" if n_reason else ""))
+                job.step = f"{label} · " + (f"pensando: {n_reason} tokens" if n_reason and not n_text else
+                                            f"escribiendo: {n_text} tokens" + (f" (tras pensar {n_reason})" if n_reason else ""))
 
             def ask(prompt: str) -> Any:
                 return client.chat(system, prompt, images, max_tokens=max_tokens, effort=effort, timeout=timeout,
@@ -396,8 +418,9 @@ class Generator:
             llm_name = answer.model or llm_name
             self._save_answer(job, rnd, answer.text)
             job.say(f"respuesta de {llm_name or 'el modelo'} en {answer.seconds:.0f} s, ~{len(answer.text) // 4} tokens"
-                    + (f" tras pensar ~{answer.reasoning_chars // 4}" if answer.reasoning_chars else "")
-                    + {"length": " (cortada por el límite de tokens)", "loop": " (cortada: se repetía)",
+                    + (f" tras pensar {answer.reasoning_tokens} tokens" if answer.reasoning_tokens else "")
+                    + (" (la respuesta se pidió aparte con su razonamiento)" if answer.followed_up else "")
+                    + {"length": " (cortada por el límite de tokens)", "loop": " (cortada: se repetía)", "think_budget": "",
                        "timeout": " (cortada por tiempo)"}.get(answer.finish, ""))
             if answer.finish == "cancelled":
                 break
@@ -448,11 +471,13 @@ class Generator:
                 if data.get("done"):
                     job.say("el modelo da el resultado por bueno")
                 break
-            front_meta, front_ix, _ = refs["front"][0]
-            reference = ("The FRONT reference rows (plane front, origin [0,0]; same palette indices):\n"
-                         + "\n".join(self._map_rows(front_ix, model.palette)))
+            if refs:
+                reference = ("The FRONT reference rows (plane front, origin [0,0]; same palette indices):\n"
+                             + "\n".join(self._map_rows(refs["front"][0][1], model.palette)))
+            else:
+                reference = "What the user asked for: " + str(p.get("prompt") or "").strip()
             text = REVIEW.format(round=rnd + 1, rounds=total, size=model.size, count=model.count, bounds=model.bounds(),
-                                 guard=guard, silhouette=self._silhouette_report(model, refs), errors=self._errors_text(result),
+                                 guard=guard, silhouette=self._silhouette_report(model, refs) if refs else "", errors=self._errors_text(result),
                                  reference=reference, paint_rule=paint_rule)
             text += "\n\n" + OPS_GUIDE + "\n\nPalette (index: colour):\n" + self._palette_text(model)
             images = list(ref_images) + ([png_bytes(sheet(model, 900))] if model.count else [])
@@ -499,7 +524,8 @@ class Generator:
         if p.get("prompt"):
             lines.append("What the user wants: " + str(p["prompt"]).strip())
         lines.append("Palette (index(character): colour): " + self._palette_text(model))
-        lines.append("Grid characters in the reference rows use the SAME indices as the palette.")
+        if refs:
+            lines.append("Grid characters in the reference rows use the SAME indices as the palette.")
         for role in ROLES:
             for meta, ix, _ in refs.get(role, []):
                 # the reference's own colours mapped to model palette indices
@@ -515,8 +541,12 @@ class Generator:
                          "its contact sheet is the last picture. Your operations are applied ON TOP of it: reshape it "
                          "(carve with c:0, add volume, repaint) or clear it first with {\"op\":\"clear\"} if it is a bad start.")
         else:
-            lines.append("\nThe grid is empty: sculpt the whole model.")
-        lines.append("\nThe pictures attached are the references (in the order above)" + (" and the starting model's contact sheet." if model.count else "."))
+            lines.append("\nThe grid is empty: sculpt the whole model." if refs else
+                         "\nThe grid is empty and there are no pictures: build it from the description.")
+        if refs:
+            lines.append("\nThe pictures attached are the references (in the order above)" + (" and the starting model's contact sheet." if model.count else "."))
+        elif model.count:
+            lines.append("\nThe picture attached is the current model's contact sheet.")
         return "\n".join(lines)
 
     @staticmethod

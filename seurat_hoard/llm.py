@@ -158,7 +158,10 @@ class ModelClient:
         if calls > 1:
             answer = Answer(answer.text, answer.model, answer.finish, len(reasoning), seconds, reasoning, spent, False,
                             answer.finish, calls)
-        if thinking and answer.finish != "cancelled" and answer.reasoning and "{" not in answer.text:
+        # No answer at all, or an answer cut by the server's per-call cap (thinking + answer share it): write the answer
+        # again in a call without thinking, which has the whole cap for it.
+        cut = answer.finish == "length" and not _complete_json(answer.text)
+        if thinking and answer.finish != "cancelled" and answer.reasoning and ("{" not in answer.text or cut):
             # The thinking used the whole budget (or the server cut it) before any answer: ask again WITHOUT thinking,
             # handing the model its own reasoning, so the minutes of planning turn into operations.
             follow = self._follow_up(body, answer.reasoning, max_tokens)
@@ -201,9 +204,9 @@ class ModelClient:
                                                               "reasoning_budget", "reasoning_effort", "chat_template_kwargs")}
         follow["messages"] = list(body["messages"]) + [
             {"role": "assistant", "content": "My reasoning so far (private notes, not the answer):\n" + reasoning},
-            {"role": "user", "content": "Your thinking ran out of room. Using the plan in your notes above, write the final "
-                                        "answer NOW: ONE JSON object exactly as the instructions say, nothing else. Keep it "
-                                        "compact; if the plan was not finished, decide the remaining parts quickly."}]
+            {"role": "user", "content": "Your thinking (or your answer) ran out of room. Using the plan in your notes above, "
+                                        "write the final answer NOW, complete: ONE JSON object exactly as the instructions "
+                                        "say, nothing else. If the plan was not finished, decide the remaining parts quickly."}]
         follow["max_tokens"] = max_tokens
         follow["temperature"] = 0.3
         follow["chat_template_kwargs"] = {"enable_thinking": False}
@@ -288,6 +291,18 @@ class ModelClient:
         if on_progress:
             on_progress(t_text, t_reason)
         return Answer("".join(text), model, finish, n_reason, time.time() - t0, "".join(reasoning), t_reason)
+
+
+def _complete_json(text: str) -> bool:
+    try:
+        parse = json.JSONDecoder().raw_decode
+        i = text.find("{")
+        if i < 0:
+            return False
+        parse(text, i)
+        return True
+    except ValueError:
+        return False
 
 
 class _RetryWithoutReasoning(Exception):

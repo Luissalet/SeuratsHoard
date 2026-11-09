@@ -369,3 +369,39 @@ def test_thinking_cut_by_the_server_is_continued(monkeypatch):
     assert ans.text == '{"ops": [1]}' and ans.thinking_calls == 2 and not ans.followed_up
     assert ans.reasoning_tokens == 65536 and "part 1 thought" in calls[1]["messages"][-2]["content"]
     assert calls[1]["chat_template_kwargs"].get("enable_thinking") is True
+
+
+def test_an_answer_cut_by_the_server_is_written_again(monkeypatch):
+    import contextlib, json as _json
+    import httpx
+    from seurat_hoard import llm as L
+    calls = []
+
+    class Resp:
+        status_code = 200
+
+        def __init__(self, lines):
+            self._lines = lines
+
+        def iter_lines(self):
+            yield from self._lines
+
+        def read(self):
+            return b""
+
+    @contextlib.contextmanager
+    def fake_stream(method, url, json=None, timeout=None):
+        calls.append(json)
+        if json["chat_template_kwargs"].get("enable_thinking"):
+            lines = ["data: " + _json.dumps({"choices": [{"delta": {"reasoning_content": "plan. "}}],
+                                              "usage": {"completion_tokens": 30000, "reasoning_tokens": 30000}}),
+                     "data: " + _json.dumps({"choices": [{"delta": {"content": '{"notes": "x", "code": "PALETTE = [1, 2'}, "finish_reason": "length"}],
+                                              "usage": {"completion_tokens": 32768, "reasoning_tokens": 30000}})]
+        else:
+            lines = ["data: " + _json.dumps({"choices": [{"delta": {"content": '{"notes": "x", "code": "ok"}'}, "finish_reason": "stop"}]})]
+        yield Resp(lines + ["data: [DONE]"])
+
+    monkeypatch.setattr(httpx, "stream", fake_stream)
+    ans = L.ModelClient({"llm_url": "http://x/v1", "llm_model": "m"}).chat("s", "u", [], max_tokens=1000, effort="max", timeout=60,
+                                                                          thinking_tokens=200000)
+    assert ans.followed_up and ans.text == '{"notes": "x", "code": "ok"}' and len(calls) == 2

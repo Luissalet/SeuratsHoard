@@ -275,3 +275,13 @@ def export(model: VoxelModel, fmt: str, **opts) -> bytes:
     if fmt == "sprites":
         return to_sprites(model, opts.get("size"))
     raise SeuratError("invalid", f"Unknown format {fmt!r}; use one of {', '.join(FORMATS)}.")
+
+
+def import_model(data: bytes, model_id: str, name: str):
+    """A model from a MagicaVoxel .vox or a Minecraft .schem (WorldEdit/Sponge), told apart by their content."""
+    if data[:4] == b"VOX ":
+        m = from_vox(data, model_id, name)
+        m.source = {"kind": "imported", "format": "vox"}
+        return m
+    from .schem import from_schem
+    return from_schem(data, model_id, name)

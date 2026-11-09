@@ -393,8 +393,8 @@ $('file-vox').addEventListener('change', async (e) => {
 async function importVox(file) {
   try {
     await flushSave();
-    const name = file.name.replace(/\.vox$/i, '');
-    const m = await api(`/api/models/import-vox?name=${encodeURIComponent(name)}`, { method: 'POST', raw: file });
+    const name = file.name.replace(/\.(vox|schem)$/i, '');
+    const m = await api(`/api/models/import?name=${encodeURIComponent(name)}`, { method: 'POST', raw: file });
     await refreshModels();
     await openModel(m.id);
     toast(`Importado: ${m.name} (${nf.format(m.count)} voxels)`, 'ok');

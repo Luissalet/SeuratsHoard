@@ -405,3 +405,75 @@ def test_an_answer_cut_by_the_server_is_written_again(monkeypatch):
     ans = L.ModelClient({"llm_url": "http://x/v1", "llm_model": "m"}).chat("s", "u", [], max_tokens=1000, effort="max", timeout=60,
                                                                           thinking_tokens=200000)
     assert ans.followed_up and ans.text == '{"notes": "x", "code": "ok"}' and len(calls) == 2
+
+
+def _schem_bytes(w, h, l, palette, ids, version=2):
+    import gzip, struct
+
+    def s(x):
+        b = x.encode()
+        return struct.pack(">H", len(b)) + b
+
+    def tag(t, name, payload):
+        return bytes([t]) + s(name) + payload
+
+    def varints(vals):
+        out = bytearray()
+        for v in vals:
+            while True:
+                b = v & 0x7F
+                v >>= 7
+                out.append(b | (0x80 if v else 0))
+                if not v:
+                    break
+        return bytes(out)
+
+    pal = b"".join(tag(3, k, struct.pack(">i", v)) for k, v in palette.items()) + b"\0"
+    data = varints(ids)
+    blocks = tag(10, "Palette", pal) + tag(7, "BlockData" if version == 2 else "Data", struct.pack(">i", len(data)) + data)
+    body = (tag(3, "Version", struct.pack(">i", version)) + tag(2, "Width", struct.pack(">h", w))
+            + tag(2, "Height", struct.pack(">h", h)) + tag(2, "Length", struct.pack(">h", l)))
+    if version == 2:
+        body += blocks + b"\0"
+        return gzip.compress(tag(10, "Schematic", body))
+    body += tag(10, "Blocks", blocks + b"\0") + b"\0"
+    return gzip.compress(tag(10, "", tag(10, "Schematic", body) + b"\0"))
+
+
+def test_schem_import_versions_and_colours():
+    from seurat_hoard.exporters import import_model
+    from seurat_hoard.schem import block_color
+    w, h, l = 3, 2, 2
+    palette = {"minecraft:air": 0, "minecraft:red_wool": 1, "minecraft:oak_stairs[facing=east]": 2, "minecraft:mystery_block": 3}
+    ids = [0] * (w * h * l)
+    ids[0] = 1                                    # x=0, y=0, z=0
+    ids[2 + 1 * w + 1 * w * l] = 2                # x=2, y=1, z=1
+    ids[1] = 300                                  # a multi-byte varint index outside the palette: empty
+    for version in (2, 3):
+        m = import_model(_schem_bytes(w, h, l, palette, ids, version), "m", "t")
+        assert m.size == [3, 2, 2] and m.count == 2
+        assert m.palette[m.grid[0, 0, 0] - 1] == "#a12722" and m.palette[m.grid[2, 1, 1] - 1] == "#a2834f"
+    assert block_color("minecraft:cave_air") is None and block_color("minecraft:blue_concrete_powder") == "#464ba6"
+    import pytest as _p
+    from seurat_hoard.errors import SeuratError
+    with _p.raises(SeuratError) as e:
+        import_model(b"<!doctype html><html>", "m", "t")
+    assert "web page" in e.value.message
+
+
+def test_sprite_builder_keeps_the_outline_off_the_sides():
+    import numpy as np
+    from seurat_hoard.builders import build
+    from seurat_hoard.images import Indexed
+
+    grid = np.zeros((12, 12), dtype=np.uint8)
+    grid[1:11, 1:11] = 1                       # black outline
+    grid[2:10, 2:10] = 2                       # red body
+    ix = Indexed(width=12, height=12, palette=["#000000", "#cc2222"], grid=grid)
+    m = build("sprite", ix, depth=6, base_palette=[])
+    pal = m.palette
+    front_z = m.grid[1, 5].nonzero()[0].max()
+    assert pal[m.grid[1, 5, front_z] - 1] == "#000000"                   # outline on the front face
+    mid = m.grid[1, 5].nonzero()[0]
+    if len(mid) > 2:
+        assert pal[m.grid[1, 5, mid[len(mid) // 2]] - 1] != "#000000"     # but not inside the side wall

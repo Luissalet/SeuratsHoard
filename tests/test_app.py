@@ -212,6 +212,10 @@ class CodeLink(FakeLink):
     """Answers voxel programs: a failing one, then a working one, then done."""
 
     def chat(self, messages, images=None, **kw):
+        if messages[0]["content"].startswith("You are a voxel art director"):
+            self.briefs = getattr(self, "briefs", []) + [messages]
+            return SimpleNamespace(text=json.dumps({"brief": "A small round bird: body ellipsoid, two wings of four feathers."}),
+                                   model="deepseek-v4.1-flash")
         self.calls.append({"messages": messages, "images": images or [], **kw})
         n = len(self.calls)
         if n == 1:
@@ -249,6 +253,8 @@ def test_code_generation_runs_the_program_and_keeps_it(tmp_path):
         assert "mirror_x(g)" in model["source"]["program"] and model["source"]["method"] == "code"
         second = link.calls[1]["messages"][1]["content"]
         assert "FAILED" in second and "import os" in second
+        assert "DESIGN BRIEF" in link.calls[0]["messages"][1]["content"] and "four feathers" in second
+        assert model["source"]["brief"].startswith("A small round bird") and st["brief"]
 
 
 def test_program_sandbox_limits():

@@ -154,19 +154,39 @@ WHAT MAKES IT GOOD
 - Colours: 8-20 flat colours. Each main colour with a lighter shade (top, front-facing) and a darker one (underside,
   back, inner sides); accents for eyes, beak, markings. NO black outlines: they are a 2D sprite habit; voxels get their
   edges from the light.
-- References: official artwork shows the true anatomy and proportions; small game sprites are drawn from above at an
-  angle and squashed: use them for colours and markings, not as a projection.
+- Understand the subject, do not trace pictures. Work from the written description, the DESIGN BRIEF and what you know
+  about the subject (a known character, animal, building or object: recall its real anatomy, proportions, colours and
+  characteristic details). Pictures, when there are any, are loose hints for colours and markings; never copy them
+  pixel by pixel or as projections (game sprites are tiny, drawn from above at an angle and squashed).
 - A clear pose that fits the grid (for a flying creature: wings spread wide, slightly raised).
 
 ANSWER: ONE JSON object {"notes": "what you built, in one or two sentences", "code": "<the complete program>"}"""
+
+BRIEF_SYSTEM = """You are a voxel art director. Before anything is built you write the DESIGN BRIEF a voxel artist will
+follow: you understand the subject and think it through in 3D. Use what you know about the subject (a known character,
+creature, building or object: its real anatomy, proportions, colours and the details that make it recognisable) and the
+user's description. Pictures, if any, are loose hints for colours and markings: do not describe or copy their pixels.
+
+The brief must say, concretely, for a voxel grid of the given size (x right, y up, z towards the viewer; the subject
+faces +z):
+1. What the subject is and the 3-5 features that make it instantly recognisable.
+2. The pose and how it fills the grid (bounding box in voxels).
+3. Every part (body, head, neck, wings, tail, legs, crest, markings...; for a scene, every building and element) with
+   its shape (ellipsoid, tapered tube, fan of feathers, polygon...), its size in voxels and its position in x, y AND z,
+   and how it joins the others.
+4. The palette: each colour as #rrggbb with what it is used for, including lighter and darker shades.
+5. What must read from the side and from above (depth, overlaps), and the common mistakes to avoid for this subject.
+
+ANSWER: ONE JSON object {"brief": "<the brief, plain text, as long as it needs>"}"""
 
 CODE_REVIEW = """Round {round} of {rounds}. Your previous program (below) built the model in the LAST picture: a contact
 sheet with flat views (front, left, top, back) and two isometric views. The other pictures are the references.
 Current model: grid {size}, {count} voxels, bounds {bounds}.
 {problem}
-Compare carefully with the references and fix the biggest problems first: wrong anatomy or proportions, parts missing
-or misplaced in depth (look at the left and top views), flat boards, holes, floating pieces, colours that do not match,
-missing characteristic details. Keep what already works. Answer the COMPLETE new program (it replaces the old one).
+Judge it as the subject itself, against the DESIGN BRIEF and the description (not by matching pictures pixel by pixel):
+would someone recognise it at once from every side? Fix the biggest problems first: wrong anatomy or proportions, parts
+of the brief missing or misplaced in depth (look at the left and top views), flat boards, holes, floating pieces, wrong
+colours, missing characteristic details, a weak pose. Keep what already works. Answer the COMPLETE new program (it replaces the old one).
 If the model is already excellent, answer {{"done": true, "notes": "why", "code": ""}}.
 Answer ONE JSON object: {{"notes": "...", "code": "..."}}
 
@@ -190,6 +210,7 @@ class Job:
     llm: str = ""
     error: str = ""
     warning: str = ""                       # the model failed part-way; what was built before is saved
+    brief: str = ""                         # code method: the design brief written before the program
     created: float = field(default_factory=time.time)
     finished: float = 0.0
     cancel: threading.Event = field(default_factory=threading.Event)
@@ -201,7 +222,7 @@ class Job:
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "status": self.status, "step": self.step, "log": self.log[-80:], "rounds": self.rounds,
-                "model_id": self.model_id, "model_name": self.model_name, "llm": self.llm, "error": self.error, "warning": self.warning, "answers": self.answers,
+                "model_id": self.model_id, "model_name": self.model_name, "llm": self.llm, "error": self.error, "warning": self.warning, "brief": self.brief, "answers": self.answers,
                 "created": self.created, "finished": self.finished,
                 "params": {k: v for k, v in self.params.items() if k != "images"}}
 
@@ -426,14 +447,14 @@ class Generator:
             target.grid, target.palette = model.grid, model.palette
             target.source = {"kind": "generated", "mode": start, "references": [r["id"] for r in p["references"]],
                              "prompt": p.get("prompt") or "", "llm": llm_name, "rounds": len(job.rounds) - 1, "job": job.id,
-                             "method": method, **({"program": program} if program else {})}
+                             "method": method, **({"program": program} if program else {}), **({"brief": job.brief} if job.brief else {})}
             saved = self.svc.store.save(target, version_note="before generation " + job.id)
         else:
             model.id = self.svc.store.new_id()
             model.name = name
             model.source = {"kind": "generated", "mode": start, "references": [r["id"] for r in p["references"]],
                             "prompt": p.get("prompt") or "", "llm": llm_name, "rounds": len(job.rounds) - 1, "job": job.id,
-                            "method": method, **({"program": program} if program else {})}
+                            "method": method, **({"program": program} if program else {}), **({"brief": job.brief} if job.brief else {})}
             saved = self.svc.store.save(model)
         job.model_id, job.model_name = saved.id, saved.name
         job.say(f"guardado: {saved.name} ({saved.count} voxels)")
@@ -581,12 +602,32 @@ class Generator:
             for meta, ix, _ in refs.get(role, []):
                 lines.append(f"Reference picture '{meta.get('name')}' ({role}, {meta.get('width')}x{meta.get('height')} px).")
         if ref_colors:
-            lines.append("Colours found in the references (use them and add lighter and darker shades): " + ", ".join(ref_colors[:24]))
+            lines.append("Colours seen in the pictures (hints only): " + ", ".join(ref_colors[:24]))
         if not refs:
             lines.append("There are no pictures: build it from the description.")
+        # ---- the design brief: understand the subject in writing before any code
+        job.say("el modelo piensa el encargo y escribe el brief de diseño")
+
+        def brief_progress(n_text: int, n_reason: int) -> None:
+            job.step = "brief de diseño · " + (f"pensando: {n_reason} tokens" if n_reason and not n_text else f"escribiendo: {n_text} tokens")
+
+        b_answer = client.chat(BRIEF_SYSTEM, "\n".join(lines), list(ref_images), max_tokens=max_tokens, effort=effort,
+                               timeout=timeout, on_progress=brief_progress, cancel=job.cancel, thinking_tokens=thinking_tokens)
+        if b_answer.finish == "cancelled":
+            return b_answer.model or ""
+        try:
+            brief = str(parse_json(b_answer.text).get("brief") or "").strip()
+        except ValueError:
+            brief = b_answer.text.strip()
+        brief = brief[:20000]
+        self._save_answer(job, 0, brief, suffix="-brief")
+        job.brief = brief
+        job.say(f"brief listo ({len(brief.split())} palabras, {b_answer.seconds:.0f} s)")
+        if brief:
+            lines.append("\nDESIGN BRIEF (follow it):\n" + brief)
         text = "\n".join(lines)
         images = list(ref_images)
-        llm_name, good_code, total = "", "", 1 + rounds
+        llm_name, good_code, total = b_answer.model or "", "", 1 + rounds
         for rnd in range(1, total + 1):
             if job.cancel.is_set():
                 break

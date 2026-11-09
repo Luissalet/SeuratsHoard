@@ -17,9 +17,9 @@ from .voxels import VoxelModel
 
 ORTHO = ("front", "back", "left", "right", "top", "bottom")
 ISO = ("iso", "iso_front_left", "iso_back_left", "iso_back_right")   # iso = seen from front-right
-#: Handheld-game overworld cameras: the front and back sprites are seen from well above, the side ones nearly in profile.
-OVERWORLD = {"overworld_front": (0.0, 45.0), "overworld_back": (180.0, 45.0), "overworld_left": (-90.0, 20.0),
-             "overworld_right": (90.0, 20.0)}
+#: Handheld-game overworld cameras: the front and back sprites are seen from well above, the side ones in true profile.
+OVERWORLD = {"overworld_front": (0.0, 45.0), "overworld_back": (180.0, 45.0), "overworld_left": (-90.0, 0.0),
+             "overworld_right": (90.0, 0.0)}
 VIEWS = ORTHO + ISO + tuple(OVERWORLD) + ("sheet",)
 BG_DARK = (26, 22, 30, 255)
 

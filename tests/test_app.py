@@ -349,7 +349,10 @@ def test_sprite_target_judges_runs_from_the_game_camera(tmp_path):
         assert st["status"] == "done", st
         assert st["target"] == "sprite" and 0 < st["match"] <= 1
         system = link.calls[0]["messages"][0]["content"]
-        assert "SPRITE TARGET" in system and "45 degrees" in system and "20 degrees" in system
+        assert "SPRITE TARGET" in system and "45 degrees" in system and "TRUE PROFILE" in system and "carve_side" in system
+        user0 = link.calls[0]["messages"][-1]["content"]
+        user0 = user0[0]["text"] if isinstance(user0, list) else user0
+        assert "SPRITE_PALETTE" in user0 and "SIDE sprite" in user0 and "z = " in user0
         assert len(link.calls[0]["images"]) == 1                      # the labelled sprite board
         after_run = link.calls[2]["messages"][-1]["content"]
         text = after_run[0]["text"] if isinstance(after_run, list) else after_run
@@ -358,7 +361,7 @@ def test_sprite_target_judges_runs_from_the_game_camera(tmp_path):
         good = [r for r in st["rounds"] if r.get("sprite_render")]
         assert good and len(good[0]["views"]) == 3 and (cfg.data_dir / "renders" / good[0]["sprite_render"]).exists()
         model = c.get(f"/api/models/{st['model_id']}").json()
-        assert model["size"][0] >= 32                                  # about one voxel per sprite pixel, at least 32
+        assert 16 <= model["size"][0] <= 32                            # one voxel per sprite pixel plus a margin
         # the same check as a tool
         head = {"Authorization": "Bearer " + svc.token}
         res = c.post("/api/agent/call", json={"name": "model_sprite_match", "arguments": {
@@ -371,3 +374,13 @@ def test_sprite_target_judges_runs_from_the_game_camera(tmp_path):
         free = c.post("/api/generate", json={"references": [{"id": ids["front"], "role": "front"}], "method": "agent", "steps": 4,
                                              "target": "free"}).json()
         assert c.get(f"/api/jobs/{free['job_id']}").json()["target"] == "free"
+
+
+def test_model_program_with_sprite_tools(app_client, tmp_path):
+    c, svc, _ = app_client
+    head = {"Authorization": "Bearer " + svc.token}
+    ref = c.post("/api/references?name=side", content=sprite_png(), headers={"Content-Type": "image/png"}).json()
+    res = c.post("/api/agent/call", json={"name": "model_program", "arguments": {
+        "code": "PALETTE = SPRITE_PALETTE\ndef build(g):\n    extrude_side(g, X//2-2, X//2+2)\n",
+        "name": "perfil", "sprites": [{"id": ref["id"], "role": "side"}]}}, headers=head).json()
+    assert res["count"] > 100 and res["size"][2] >= 16, res

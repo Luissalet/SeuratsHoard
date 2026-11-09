@@ -51,18 +51,26 @@ class Services:
         self.store.save(model, version_note=note or f"{len(ops)} operations")
         return {**result, "id": model.id, "bounds": model.bounds(), "size": model.size}
 
-    def run_program(self, code: str, *, model_id: str = "", name: str = "", size: Optional[Iterable[int]] = None) -> dict[str, Any]:
+    def run_program(self, code: str, *, model_id: str = "", name: str = "", size: Optional[Iterable[int]] = None,
+                    sprites: Optional[list[dict[str, str]]] = None) -> dict[str, Any]:
         """Run a voxel program (PALETTE + build(g), see program.py) into a model: an existing one (its grid and palette
-        are replaced, the previous content stays as a version) or a new one."""
+        are replaced, the previous content stays as a version) or a new one. ``sprites`` ([{id, role}] with role front,
+        back or side) gives the program the sprite tools (SPRITE_PALETTE, SIDE, carve_side, paint_view...); a new model
+        then gets a grid of one voxel per sprite pixel."""
+        from . import spritecam
         from .program import ProgramError, run_program
+        refs = [spritecam.sprite_ref(r["role"], self.store.reference(r["id"]).get("name") or r["role"], self.store.reference_bytes(r["id"]))
+                for r in (sprites or [])]
         if model_id:
             model = self.store.get(model_id)
             dims = list(size) if size else model.size
         else:
-            dims = list(size or self.settings["new_size"])
+            dims = list(size or (spritecam.grid_size(refs) if refs else self.settings["new_size"]))
             model = VoxelModel.empty(self.store.new_id(), (name or "Programa").strip()[:120], dims)
+        data = spritecam.program_data(refs, [int(v) for v in dims], float(self.settings["sprite_pitch"]),
+                                      float(self.settings["sprite_side_pitch"])) if refs else None
         try:
-            res = run_program(code, [int(v) for v in dims], timeout=float(self.settings["program_timeout_s"]))
+            res = run_program(code, [int(v) for v in dims], timeout=float(self.settings["program_timeout_s"]), sprites=data)
         except ProgramError as exc:
             raise SeuratError("program_failed", f"The program failed: {exc.message}", exc.trace[-800:] or None) from None
         model.grid, model.palette = res.grid, res.palette

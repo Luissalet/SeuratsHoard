@@ -15,11 +15,14 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
     refina, y dice cuándo ha terminado (acciones y minutos máximos en Ajustes). Cada ejecución que funciona se guarda.
   - *Sprites del juego como objetivo* (`target: sprite`, automático con pixel art pequeño): las imágenes frontal, trasera
     y lateral son sprites de overworld que hay que reconstruir en 3D como hacen los mods voxel (un voxel por píxel más o
-    menos, los colores y el diseño del sprite). Esos sprites están dibujados desde una cámara que mira desde arriba, así
-    que tras cada ejecución Seurat renderiza el modelo desde la misma cámara (frente y espalda a 45 grados sobre el
-    horizonte, lados a 20; ambos en Ajustes), lo lleva a la resolución del sprite y le enseña al modelo cada sprite junto
-    a su render con la diferencia de silueta (rojo falta, azul sobra) y la coincidencia; el panel del trabajo las enseña
-    por ronda.
+    menos, los colores y el diseño del sprite). El sprite lateral es un perfil puro (sin ángulo de cámara): la vista más
+    importante, cuenta doble y el programa lo recibe como matriz en coordenadas de la cuadrícula (`SIDE`, columna = z,
+    fila = y) con herramientas para recortar el modelo a él (`carve_side`), rellenarlo (`extrude_side`) y pintar desde él
+    (`paint_side`, y `paint_view` para cualquier sprite), además de la paleta de los sprites y sus mapas de píxeles en el
+    prompt. Frente y espalda están dibujados desde unos 45 grados (su eje horizontal es exactamente x; en Ajustes). Tras
+    cada ejecución Seurat proyecta el modelo desde la cámara de cada sprite a un voxel por píxel y le enseña cada sprite
+    junto a él con la diferencia de silueta (rojo falta, azul sobra), la coincidencia y cómo le va de tamaño; el panel del
+    trabajo las enseña por ronda.
   - *Con el modelo de lenguaje, como programa por rondas fijas*: DeepSeek V4.1 Flash escribe primero un brief de diseño con
     lo que sabe del tema y tu descripción (partes, proporciones, posición en 3D, paleta; las imágenes son solo pistas,
     nunca se calcan) y después un programa en Python que
@@ -44,7 +47,8 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
   desde cuatro lados. Se pueden importar `.vox` y schematics `.schem` de Minecraft (WorldEdit).
 - **Asistentes** (MCP, `mcp_server.py`, 29 herramientas): listar, crear y editar modelos con operaciones (`model_ops`),
   verlos (`model_look` devuelve una imagen, también desde las cámaras de overworld del juego), comparar un modelo con
-  sprites del juego desde su cámara (`model_sprite_match`), añadir referencias, construir o generar desde imágenes, seguir y cancelar
+  sprites del juego desde su cámara (`model_sprite_match`), ejecutar programas voxel con las herramientas de sprites
+  (`model_program` con `sprites`), añadir referencias, construir o generar desde imágenes, seguir y cancelar
   generaciones, exportar, versiones y ajustes.
 
 ## El lenguaje de operaciones

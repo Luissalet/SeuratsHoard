@@ -2,7 +2,9 @@
 
 Handheld-game overworld sprites are not flat views. The camera looks down on the world, so the front and back sprites
 show the subject from well above (the vertical axis of the picture mixes height and depth: a bird's tail fan, seen
-from behind, lands at the bottom because it is the nearest part) and the side sprites are nearly in profile. To compare
+from behind, lands at the bottom because it is the nearest part) and the side sprites are true profiles, drawn with no
+camera angle: the most reliable view, one sprite pixel per voxel in z and y. The voxel program gets the side sprite as an
+array in grid coordinates with helpers to carve to it and paint from it (``program_data``). To compare
 a voxel model with them Seurat renders the model from the same camera, brings it to the sprite's resolution and lays the
 two silhouettes over each other: what is missing, what is extra, how well they match. That is the feedback the model
 gets after every run, and what ``model_sprite_match`` answers.
@@ -22,7 +24,9 @@ from .voxels import VoxelModel
 
 #: default camera heights (degrees above the horizon) of the overworld sprites
 FRONT_BACK_PITCH = 45.0
-SIDE_PITCH = 20.0
+SIDE_PITCH = 0.0
+#: the side view counts double in the overall match: it is a true profile
+WEIGHTS = {"side": 2.0}
 ZOOM = 6
 
 
@@ -45,11 +49,23 @@ class ViewMatch:
     colour: float                  # mean colour difference where both are present (0 = same, 1 = opposite)
     sprite_aspect: float           # width / height of the sprite's subject
     model_aspect: float            # width / height of the model seen from that camera
+    fit: str = "pixel"             # pixel: one voxel per sprite pixel; area: scaled to the sprite
+    size_ratio: tuple = (1.0, 1.0)  # model width and height from that camera / the sprite's (pixel fit: 1 = right size)
     panels: list[Image.Image] = field(default_factory=list)
 
     def summary(self) -> str:
         where = {"front": "in front", "back": "behind", "side": "at the side"}.get(self.role, self.role)
         shape = ""
+        if self.fit == "pixel":
+            wr, hr = self.size_ratio
+            parts = []
+            if abs(wr - 1) > 0.06:
+                parts.append(f"{wr:.0%} of the sprite's width")
+            if abs(hr - 1) > 0.06:
+                parts.append(f"{hr:.0%} of its height")
+            return (f"{self.role.upper()} sprite '{self.name}' (camera {where}, {self.pitch:.0f} degrees above, one voxel per pixel): "
+                    f"silhouette match {self.iou:.2f}, missing {self.missing:.0%} of the sprite, extra {self.extra:.0%}, colour "
+                    f"difference {self.colour:.2f}" + ("; from this camera the model is " + " and ".join(parts) if parts else "; size right") + ".")
         if self.model_aspect > self.sprite_aspect * 1.12:
             shape = "; from this camera the model is too WIDE for its height (or too short)"
         elif self.model_aspect < self.sprite_aspect / 1.12:
@@ -61,7 +77,8 @@ class ViewMatch:
     def to_dict(self) -> dict[str, Any]:
         return {"role": self.role, "name": self.name, "yaw": self.yaw, "pitch": self.pitch, "iou": round(self.iou, 3),
                 "missing": round(self.missing, 3), "extra": round(self.extra, 3), "colour": round(self.colour, 3),
-                "sprite_aspect": round(self.sprite_aspect, 3), "model_aspect": round(self.model_aspect, 3)}
+                "sprite_aspect": round(self.sprite_aspect, 3), "model_aspect": round(self.model_aspect, 3), "fit": self.fit,
+                "size_ratio": [round(float(v), 3) for v in self.size_ratio]}
 
 
 def sprite_ref(role: str, name: str, data: bytes) -> SpriteRef:
@@ -105,25 +122,100 @@ def _big(arr: np.ndarray, zoom: int = ZOOM) -> Image.Image:
     return bg.resize((img.width * zoom, img.height * zoom), Image.NEAREST)
 
 
-def match_view(model: VoxelModel, ref: SpriteRef, yaw: float, pitch: float) -> ViewMatch:
+_SAMPLES = np.array([[a, b, c] for a in (0.25, 0.75) for b in (0.25, 0.75) for c in (0.25, 0.75)])
+
+
+def project(model: VoxelModel, yaw: float, pitch: float) -> np.ndarray:
+    """The model seen from the camera at ONE PIXEL PER VOXEL (the sprite's own scale), flat colours: RGBA (h, w, 4).
+    Each voxel is sampled at eight inner points, the nearest one wins each pixel; in a true profile (pitch 0, from the
+    side) every voxel is exactly one pixel."""
+    from .render import camera_basis
+    occ = np.argwhere(model.grid > 0)
+    if not len(occ):
+        return np.zeros((1, 1, 4), np.uint8)
+    c, r, u = camera_basis(yaw, pitch)
+    pts = (occ[:, None, :] + _SAMPLES[None]).reshape(-1, 3)
+    vox = np.repeat(np.arange(len(occ)), len(_SAMPLES))
+    pu, pv, dep = pts @ r, -(pts @ u), pts @ c
+    ix = np.floor(pu - np.floor(pu.min())).astype(np.int64)
+    iy = np.floor(pv - np.floor(pv.min())).astype(np.int64)
+    h, w = int(iy.max()) + 1, int(ix.max()) + 1
+    key = iy * w + ix
+    order = np.lexsort((dep, key))                 # per pixel, the nearest sample last
+    last = np.r_[key[order][1:] != key[order][:-1], True]
+    win = order[last]
+    pal = model.palette_rgb()
+    out = np.zeros((h * w, 4), np.uint8)
+    g = model.grid
+    cols = g[occ[vox[win], 0], occ[vox[win], 1], occ[vox[win], 2]]
+    out[key[win], :3] = pal[cols]
+    out[key[win], 3] = 255
+    return out.reshape(h, w, 4)
+
+
+def _place(m: np.ndarray, t_mask: np.ndarray, search: int = 4) -> np.ndarray:
+    """``m`` (h, w, 4) placed on a canvas the size of the sprite: centres of the two boxes together, then the integer
+    shift (within ``search`` pixels) that overlaps the sprite best."""
+    h_t, w_t = t_mask.shape
+    mm = m[..., 3] >= 128
+    mb, tb = _bbox(mm), _bbox(t_mask)
+    if mb is None or tb is None:
+        return np.zeros((h_t, w_t, 4), np.uint8)
+    ox0 = int(round((tb[0] + tb[2]) / 2 - (mb[0] + mb[2]) / 2))
+    oy0 = int(round((tb[1] + tb[3]) / 2 - (mb[1] + mb[3]) / 2))
+
+    def put(ox, oy):
+        out = np.zeros((h_t, w_t, 4), np.uint8)
+        y0, x0 = max(0, oy), max(0, ox)
+        y1, x1 = min(h_t, oy + m.shape[0]), min(w_t, ox + m.shape[1])
+        if y1 > y0 and x1 > x0:
+            out[y0:y1, x0:x1] = m[y0 - oy:y1 - oy, x0 - ox:x1 - ox]
+        return out
+
+    best, best_s = None, -1.0
+    for dy in range(-search, search + 1):
+        for dx in range(-search, search + 1):
+            cand = put(ox0 + dx, oy0 + dy)
+            cm = cand[..., 3] >= 128
+            score = (cm & t_mask).sum() / max(1, (cm | t_mask).sum()) - 1e-4 * (abs(dx) + abs(dy))
+            if score > best_s:
+                best, best_s = cand, score
+    return best
+
+
+def match_view(model: VoxelModel, ref: SpriteRef, yaw: float, pitch: float, fit: str = "auto") -> ViewMatch:
+    """``fit``: pixel = the model at one voxel per sprite pixel (what a sprite rebuild should be; a model of the wrong
+    size shows as red or blue bands); area = scaled to the sprite's size (any model); auto = pixel unless the model is
+    far from the sprite's size."""
     t = ref.rgba
     t_mask = t[..., 3] >= 128
     t_box = _bbox(t_mask) or (0, 0, t.shape[1], t.shape[0])
-    longest = max(model.size)
-    scale = max(2.0, 4.0 * max(t.shape[:2]) / max(1, longest))     # render finer than the sprite, then reduce
-    r = camera(model, yaw, pitch, scale)
-    m = _fit(r, t.shape[:2], t_box)
+    proj = project(model, yaw, pitch)
+    p_box = _bbox(proj[..., 3] >= 128)
+    if fit == "auto":
+        ratio = ((p_box[2] - p_box[0]) * (p_box[3] - p_box[1])) / max(1, (t_box[2] - t_box[0]) * (t_box[3] - t_box[1])) if p_box else 1.0
+        fit = "pixel" if 0.4 <= ratio <= 2.5 else "area"
+    if fit == "pixel":
+        m = _place(proj, t_mask)
+        model_aspect = ((p_box[2] - p_box[0]) / max(1, p_box[3] - p_box[1])) if p_box else 0.0
+    else:
+        longest = max(model.size)
+        scale = max(2.0, 4.0 * max(t.shape[:2]) / max(1, longest))     # render finer than the sprite, then reduce
+        r = camera(model, yaw, pitch, scale, shade=False)              # flat colours, like the sprite
+        m = _fit(r, t.shape[:2], t_box)
+        r_box = _bbox(np.asarray(r)[..., 3] >= 128)
+        model_aspect = ((r_box[2] - r_box[0]) / max(1, r_box[3] - r_box[1])) if r_box else 0.0
     m_mask = m[..., 3] >= 128
     inter, union = int((t_mask & m_mask).sum()), int((t_mask | m_mask).sum())
     area = max(1, int(t_mask.sum()))
     both = t_mask & m_mask
-    paint = both & (t[..., :3].astype(np.int32).sum(axis=2) > 120)     # the sprite's dark outline is not a colour
+    paint = both & (t[..., :3].astype(np.int32).sum(axis=2) > DARK)    # the sprite's dark outline is not a colour
     colour = float(np.abs(t[..., :3].astype(np.int32) - m[..., :3].astype(np.int32))[paint].sum(axis=1).mean() / 765.0) if paint.any() else 1.0
-    r_box = _bbox(np.asarray(r)[..., 3] >= 128)
-    model_aspect = ((r_box[2] - r_box[0]) / max(1, r_box[3] - r_box[1])) if r_box else 0.0
     vm = ViewMatch(ref.role, ref.name, yaw, pitch, inter / max(1, union), float((t_mask & ~m_mask).sum()) / area,
                    float((m_mask & ~t_mask).sum()) / area, colour,
-                   (t_box[2] - t_box[0]) / max(1, t_box[3] - t_box[1]), model_aspect)
+                   (t_box[2] - t_box[0]) / max(1, t_box[3] - t_box[1]), model_aspect, fit=fit,
+                   size_ratio=(((p_box[2] - p_box[0]) / max(1, t_box[2] - t_box[0]),
+                                (p_box[3] - p_box[1]) / max(1, t_box[3] - t_box[1])) if p_box else (0.0, 0.0)))
     diff = np.zeros_like(t)
     diff[both] = (150, 150, 150, 255)
     diff[t_mask & ~m_mask] = (235, 60, 50, 255)
@@ -133,17 +225,17 @@ def match_view(model: VoxelModel, ref: SpriteRef, yaw: float, pitch: float) -> V
 
 
 def match(model: VoxelModel, refs: list[SpriteRef], front_back_pitch: float = FRONT_BACK_PITCH,
-          side_pitch: float = SIDE_PITCH) -> list[ViewMatch]:
+          side_pitch: float = SIDE_PITCH, fit: str = "auto") -> list[ViewMatch]:
     """Each sprite against the model from its camera. A side sprite is tried from both sides and the better one kept
     (sheets draw one side and mirror it)."""
     out = []
     for ref in refs:
         if ref.role == "front":
-            out.append(match_view(model, ref, 0.0, front_back_pitch))
+            out.append(match_view(model, ref, 0.0, front_back_pitch, fit))
         elif ref.role == "back":
-            out.append(match_view(model, ref, 180.0, front_back_pitch))
+            out.append(match_view(model, ref, 180.0, front_back_pitch, fit))
         elif ref.role == "side":
-            a, b = match_view(model, ref, -90.0, side_pitch), match_view(model, ref, 90.0, side_pitch)
+            a, b = match_view(model, ref, -90.0, side_pitch, fit), match_view(model, ref, 90.0, side_pitch, fit)
             out.append(a if a.iou >= b.iou else b)
     return out
 
@@ -184,7 +276,11 @@ def sheet(matches: list[ViewMatch]) -> Image.Image:
 
 
 def mean_iou(matches: list[ViewMatch]) -> float:
-    return float(np.mean([m.iou for m in matches])) if matches else 0.0
+    """Weighted mean silhouette match (the side, a true profile, counts double)."""
+    if not matches:
+        return 0.0
+    w = [WEIGHTS.get(m.role, 1.0) for m in matches]
+    return float(np.average([m.iou for m in matches], weights=w))
 
 
 def board(refs: list[SpriteRef], front_back_pitch: float = FRONT_BACK_PITCH, side_pitch: float = SIDE_PITCH,
@@ -218,3 +314,94 @@ def colours(refs: list[SpriteRef], limit: int = 24) -> list[str]:
         px = px[px.sum(axis=1) > 120]
         count.update(map(tuple, px.tolist()))
     return ["#%02x%02x%02x" % c for c, _ in count.most_common(limit)]
+
+
+# ---------------------------------------------------------------------------------------------- data for the program
+DARK = 120          # an RGB sum at or below this is the sprite's outline (or a dark separation line)
+
+
+def _by_role(refs: list[SpriteRef], role: str) -> Optional[SpriteRef]:
+    return next((r for r in refs if r.role == role), None)
+
+
+def grid_size(refs: list[SpriteRef], margin: int = 4) -> list[int]:
+    """A grid that holds the sprites at one voxel per pixel: X from the front/back width (their horizontal axis is
+    exactly x), Y and Z from the side sprite (a true profile: columns are z, rows are y)."""
+    side = _by_role(refs, "side")
+    fb = [r for r in refs if r.role in ("front", "back")]
+    longest = max(max(r.rgba.shape[:2]) for r in refs)
+    x = max((r.rgba.shape[1] for r in fb), default=longest)
+    y = side.rgba.shape[0] if side is not None else longest
+    z = side.rgba.shape[1] if side is not None else longest
+    up = lambda v: int(min(128, max(16, -(-(v + 2 * margin) // 4) * 4)))
+    return [up(x), up(y), up(z)]
+
+
+def _palette_index(rgba: np.ndarray, palette: list[str]) -> np.ndarray:
+    """(h, w) indices into ``palette`` (1-based, 0 = empty); outline pixels take the colour of the nearest inner pixel."""
+    pal = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in palette], np.int32)
+    opaque = rgba[..., 3] >= 128
+    rgb = rgba[..., :3].astype(np.int32)
+    inner = opaque & (rgb.sum(axis=2) > DARK)
+    d = ((rgb[..., None, :] - pal[None, None]) ** 2).sum(axis=3)
+    idx = d.argmin(axis=2) + 1
+    out = np.where(inner, idx, 0)
+    # outline: borrow the nearest inner colour (a few growing passes)
+    todo = opaque & ~inner
+    for _ in range(6):
+        if not todo.any():
+            break
+        grown = out.copy()
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            sh = np.roll(np.roll(out, dy, axis=0), dx, axis=1)
+            take = todo & (grown == 0) & (sh > 0)
+            grown[take] = sh[take]
+        todo &= grown == 0
+        out = grown
+    out[todo] = 1
+    return out
+
+
+def program_data(refs: list[SpriteRef], size: list[int], front_back_pitch: float = FRONT_BACK_PITCH,
+                 side_pitch: float = SIDE_PITCH) -> dict[str, Any]:
+    """What the voxel program receives about the sprites: their palette, the side sprite placed in grid coordinates
+    (columns = z, rows = y, one pixel per voxel, centred in z, standing on y = 2) and every sprite with its camera for
+    ``paint_view``."""
+    palette = colours(refs, limit=32)
+    X, Y, Z = size
+    data: dict[str, Any] = {"palette": palette, "views": {}}
+    for ref in refs:
+        idx = _palette_index(ref.rgba, palette)
+        yaw = {"front": 0.0, "back": 180.0, "side": -90.0}.get(ref.role, 0.0)
+        pitch = side_pitch if ref.role == "side" else front_back_pitch
+        data["views"].setdefault(ref.role, {"idx": idx.tolist(), "yaw": yaw, "pitch": pitch, "name": ref.name})
+    side = _by_role(refs, "side")
+    if side is not None:
+        idx = np.asarray(data["views"]["side"]["idx"])
+        h, w = idx.shape
+        side_zy = np.zeros((Z, Y), np.int64)
+        z0, y0 = max(0, (Z - w) // 2), 2
+        for r in range(h):
+            y = y0 + (h - 1 - r)
+            if not 0 <= y < Y:
+                continue
+            row = idx[r, : max(0, min(w, Z - z0))]
+            side_zy[z0: z0 + len(row), y] = row
+        data["side"] = side_zy.tolist()
+        data["side_place"] = {"z0": z0, "y0": y0, "w": w, "h": h}
+    return data
+
+
+def char_map(ref: SpriteRef, palette: list[str]) -> str:
+    """The sprite as text, one character per pixel ('.' empty, '#' outline, letters = palette colours), rows from the
+    top, with column numbers every 10."""
+    keys = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    idx = _palette_index(ref.rgba, palette)
+    rgba = ref.rgba
+    dark = (rgba[..., 3] >= 128) & (rgba[..., :3].astype(np.int32).sum(axis=2) <= DARK)
+    h, w = idx.shape
+    lines = ["     " + "".join(str((c // 10) % 10) if c % 10 == 0 else " " for c in range(w))]
+    for r in range(h):
+        line = "".join("." if idx[r, c] == 0 else "#" if dark[r, c] else keys[(idx[r, c] - 1) % len(keys)] for c in range(w))
+        lines.append(f"{r:4d} {line}")
+    return "\n".join(lines)

@@ -32,7 +32,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "code_size": 64,         # grid side for code generations (without a size of their own)
     "program_timeout_s": 180, # time limit for one voxel program
     "sprite_pitch": 45,      # sprite target: degrees above the horizon of the camera that drew the front/back sprites
-    "sprite_side_pitch": 20, # ... and of the camera that drew the side sprites
+    "sprite_side_pitch": 0,  # ... and of the side sprites (0: a true profile, the most reliable view)
     "paint_sides": False,    # also paint the side picture on both sides (side sprites rarely match the sculpted side)
     "parallel_jobs": 1,      # generations running at the same time (read at start); one at a time thinks faster
     "llm_url": "",           # empty: the family's model (DeepSeek on the Sparks through Hoard Link); else an OpenAI-compatible URL

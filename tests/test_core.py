@@ -504,3 +504,41 @@ def test_camera_render_and_sprite_match():
     bad = spritecam.match_view(other, ref, 0, 45)
     assert good.iou > 0.8 > bad.iou and "silhouette match" in good.summary()
     assert spritecam.sheet([good, bad]).width > 100 and spritecam.colours([ref])
+
+
+def test_sprite_program_tools_make_the_profile_exact():
+    from seurat_hoard import spritecam
+    from seurat_hoard.program import run_program
+
+    # a side sprite: a bird-ish profile with a dark outline, on a flat background
+    side = np.zeros((20, 30, 4), np.uint8)
+    side[...] = (200, 100, 220, 255)
+    side[6:16, 4:22] = (20, 20, 20, 255)
+    side[7:15, 5:21] = (220, 60, 40, 255)
+    side[3:8, 20:27] = (20, 20, 20, 255)
+    side[4:7, 21:26] = (240, 200, 40, 255)
+    front = np.zeros((20, 26, 4), np.uint8)
+    front[...] = (200, 100, 220, 255)
+    front[5:15, 3:23] = (220, 60, 40, 255)
+    pngs = {}
+    for name, arr in (("side", side), ("front", front)):
+        buf = io.BytesIO(); Image.fromarray(arr, "RGBA").save(buf, "PNG"); pngs[name] = buf.getvalue()
+    refs = [spritecam.sprite_ref("side", "s", pngs["side"]), spritecam.sprite_ref("front", "f", pngs["front"])]
+    size = spritecam.grid_size(refs)
+    assert size[0] >= 20 and size[2] >= 23 and size[1] >= 14
+    data = spritecam.program_data(refs, size, 45, 0)
+    assert len(data["palette"]) >= 2 and np.asarray(data["side"]).shape == (size[2], size[1])
+    code = ("PALETTE = SPRITE_PALETTE + ['#101010']\n"
+            "def build(g):\n"
+            "    box(g, len(PALETTE), (X//2-6, 0, 0), (X//2+6, Y-1, Z-1))\n"
+            "    carve_side(g)\n"
+            "    paint_view(g, 'front')\n"
+            "    paint_side(g)\n")
+    res = run_program(code, size, 60, sprites=data)
+    m = VoxelModel.empty("t", "t", size, res.palette)
+    m.grid = res.grid
+    vm = spritecam.match_view(m, refs[0], -90, 0)
+    assert vm.iou > 0.9 and vm.colour < 0.15, vm.summary()
+    assert "z = " not in spritecam.char_map(refs[0], data["palette"]) and "#" in spritecam.char_map(refs[0], data["palette"])
+    ext = run_program("PALETTE = SPRITE_PALETTE\ndef build(g):\n    extrude_side(g, 2, 4)\n", size, 60, sprites=data)
+    assert ext.count == int(np.asarray(data["side"]).astype(bool).sum()) * 3

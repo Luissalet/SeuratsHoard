@@ -323,7 +323,7 @@ FACE_IOU = 0.82       # a front or back sprite this close to the model's own sil
 
 DEFAULTS: dict[str, dict[str, Any]] = {
     "solid": {"aspect": 1.0, "width": None, "paint": "auto"},
-    "fin": {"thickness": 2},
+    "fin": {"thickness": None},
     "fan": {"base": None, "spread": 0.5, "width": None, "root": None, "towards": None, "rim": None, "paint": "auto"},
     "pair": {"offset": None, "aspect": 1.0, "width": None, "thickness": None, "lean": 0.0, "root": None, "side": "both", "far": "auto"},
     "wings": {"offset": None, "out_up": None, "out_back": None, "span": None, "thickness": 2, "root": None, "side": "both", "curl": 0.0, "far": "auto", "opening": None},
@@ -360,8 +360,8 @@ def normalise_plan(plan: dict[str, Any]) -> dict[str, Any]:
         if kind not in TYPES:
             raise PlanError(f"part '{name}': unknown type {raw.get('type')!r} (use one of {', '.join(TYPES)})")
         part: dict[str, Any] = {"name": name, "type": kind}
-        for key in ("where", "cells", "colors", "colours", "except"):
-            if raw.get(key) is not None:
+        for key in ("where", "cells", "colors", "colours", "except", "front", "back"):
+            if raw.get(key) is not None and raw.get(key) != []:
                 part["colors" if key == "colours" else key] = raw[key]
         for key, default in DEFAULTS[kind].items():
             val = raw.get(key, default)
@@ -414,7 +414,7 @@ def _colour_set(p: Profile, spec: Any) -> Optional[np.ndarray]:
             want.add(int(((pal - rgb) ** 2).sum(axis=1).argmin()) + 1)
         elif len(it) == 1 and it in KEYS:
             k = KEYS.index(it)
-            if k < len(p.letters):
+            if k < len(p.letters) and p.letters[k] in p.palette:
                 want.add(p.palette.index(p.letters[k]) + 1)
     if not want:
         return None
@@ -673,6 +673,8 @@ def _check_stand(p: Profile, parts: list[dict[str, Any]], label: np.ndarray, not
     owners = np.bincount(label[foot], minlength=len(parts) + 1)[1:]
     k = int(owners.argmax())
     if parts[k]["type"] == "solid":              # a fan or a fin that hangs lowest is a tail, and fine
+        if p.flipped:
+            cols = w - 1 - cols
         notes.append(f"the character stands on '{parts[k]['name']}' (columns {cols.min()}-{cols.max()} at the bottom rows), a part on the "
                      f"middle line: that builds ONE leg in the middle. If those pixels are a leg or a foot, give them (the whole leg, "
                      f"up to the body) to a pair part")
@@ -773,6 +775,104 @@ def far_copies(p: Profile, label: np.ndarray, parts: list[dict[str, Any]]) -> li
 
 
 # ---------------------------------------------------------------------------------------------- building
+def fill_letters(p: Profile, sprites: dict[str, np.ndarray]) -> tuple[list[str], set]:
+    """(the colours that fill, in the order of the pixel maps' letters; the ink colours) over the side sprite and the
+    others: the side sprite's own colours first, then what only the front or the back sprite has."""
+    palette = list(p.palette)
+    inks: set = {tuple(c) for c in ink_colours(p.rgba)}
+    for role in ("side", "front", "back"):
+        t = sprites.get(role)
+        if t is None:
+            continue
+        inks |= {tuple(c) for c in ink_colours(t)}
+        for c in np.unique(t[t[..., 3] >= 128][:, :3], axis=0):
+            hexc = _hex(c)
+            if hexc not in palette:
+                palette.append(hexc)
+    return [c for c in palette if _rgb(c) not in inks], inks
+
+
+@dataclass
+class View:
+    """The front or the back sprite with the parts found in it: the reference for how each part is built across the
+    body and for what it shows to that camera."""
+    role: str
+    profile: Profile                    # the sprite read like the side one
+    label: np.ndarray                   # (h, w) part number per pixel (1-based, as in the plan), 0 where nobody's
+    axis: float                         # the column the figure is symmetric about
+    rows: dict[int, tuple[int, int]] = field(default_factory=dict)          # part -> first and last row it takes
+    inner: dict[int, np.ndarray] = field(default_factory=dict)              # part -> per row, nearest distance to the axis
+    outer: dict[int, np.ndarray] = field(default_factory=dict)              # part -> per row, farthest distance to the axis
+
+    def has(self, k: int) -> bool:
+        return k in self.rows
+
+    def at(self, k: int, t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """(inner, outer) distances to the axis of part ``k`` at heights ``t`` (0 its top row, 1 its bottom row)."""
+        r0, r1 = self.rows[k]
+        x = np.clip(np.asarray(t, np.float64), 0, 1) * (r1 - r0)
+        grid = np.arange(r1 - r0 + 1)
+        return np.interp(x, grid, self.inner[k]), np.interp(x, grid, self.outer[k])
+
+
+def read_view(role: str, sprite: Optional[np.ndarray], parts: list[dict[str, Any]], letters: list[str]) -> Optional[View]:
+    """Where the parts that say so (key ``front`` or ``back``: shapes in that sprite's columns and rows) are in that
+    sprite. Shapes snap to the sprite's patches of colour as in the side sprite; a pixel far from every shape is
+    nobody's (a part the plan did not place there)."""
+    named = [(k, part) for k, part in enumerate(parts) if part.get(role) and part["type"] not in ("skip", "decal")]
+    if sprite is None or not named:
+        return None
+    vp = read_profile(sprite)
+    vp.letters = list(letters)
+    sub = {"facing": "right", "parts": [{"name": part["name"], "type": "solid", "where": part[role]} for _, part in named]}
+    sub = normalise_plan(sub)
+    lab = assign(vp, sub)
+    h, w = vp.shape
+    label = np.zeros((h, w), np.int32)
+    for j, (k, part) in enumerate(named):
+        geo = _where_mask(vp, sub["parts"][j], geometry=True)
+        if geo is None or not geo.any():
+            continue
+        mine = (lab == j + 1) & vp.mask
+        keep = mine & geo
+        # a patch of colour that is mostly inside the shapes is the part's whole; so is the outline just around them
+        for c in np.unique(vp.cells[mine & ~geo]):
+            cell = (vp.cells == c) & mine
+            if c > 0 and (cell & geo).sum() >= 0.6 * cell.sum():
+                keep |= cell
+        near = np.pad(keep, 1)
+        near = (near[:-2, 1:-1] | near[2:, 1:-1] | near[1:-1, :-2] | near[1:-1, 2:])
+        keep |= mine & vp.ink & near
+        label[keep] = k + 1
+    view = View(role, vp, label, symmetry_axis(sprite))
+    cols = np.arange(w)[None, :] - view.axis
+    mid = 0.5 if float(view.axis).is_integer() else 0.0
+    for k, part in named:
+        m = label == k + 1
+        if m.sum() < 3:
+            continue
+        rows = np.nonzero(m.any(axis=1))[0]
+        r0, r1 = int(rows[0]), int(rows[-1])
+        dist = np.abs(cols) + np.zeros((h, 1))
+        inner = np.full(r1 - r0 + 1, np.nan)
+        outer = np.full(r1 - r0 + 1, np.nan)
+        for r in range(r0, r1 + 1):
+            if m[r].any():
+                d = dist[r][m[r]]
+                # the two halves of a hand-drawn sprite differ by a pixel: the mean of the two sides
+                left, right = d[(cols[0] < 0)[m[r]]], d[(cols[0] >= 0)[m[r]]]
+                sides = [x for x in (left, right) if len(x)]
+                # in voxels to each side of the middle plane: a sprite with a middle column gives it to both halves
+                inner[r - r0] = max(0.0, float(np.mean([x.min() for x in sides])) - 0.5 + mid)
+                outer[r - r0] = float(np.mean([x.max() for x in sides])) + 0.5 + mid
+        ok = ~np.isnan(outer)
+        grid = np.arange(len(outer))
+        view.inner[k] = np.interp(grid, grid[ok], inner[ok])
+        view.outer[k] = np.interp(grid, grid[ok], outer[ok])
+        view.rows[k] = (r0, r1)
+    return view if view.rows else None
+
+
 @dataclass
 class Built:
     grid: np.ndarray                    # (X, Y, Z) uint8 palette indices
@@ -782,6 +882,7 @@ class Built:
     parts: list[dict[str, Any]]         # the plan's parts with what was computed (width, offset, root...)
     notes: list[str] = field(default_factory=list)
     pid: Optional[np.ndarray] = None    # (X, Y, Z) part number of each voxel (1-based)
+    views: dict[str, Any] = field(default_factory=dict)   # role -> View: where the parts are in the front and back sprites
 
 
 def _inpaint(idx: np.ndarray, known: np.ndarray, region: np.ndarray) -> np.ndarray:
@@ -823,7 +924,7 @@ def _auto_root(part_mask: np.ndarray, core: np.ndarray) -> tuple[float, float]:
 
 
 def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[str] = None,
-          label: Optional[np.ndarray] = None) -> Built:
+          label: Optional[np.ndarray] = None, sprites: Optional[dict[str, np.ndarray]] = None) -> Built:
     """The voxel model of a plan. ``outline``: what becomes of the sprite's dark outline on the figure's edge: ``drop``
     (the default: it takes the colour of the part next to it, as voxel artists do), ``keep`` or ``shade`` (a darker
     tone of the part)."""
@@ -837,6 +938,8 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
         _check_eye(p, plan, parts, label, notes)
         for k, mask in far_copies(p, label, parts):
             rs, cs = np.nonzero(mask)
+            if p.flipped:
+                cs = p.shape[1] - 1 - cs                   # as the plan numbers them
             parts.append({"name": f"{parts[k]['name']} (far)", "type": "skip", "auto": parts[k]["name"]})
             label = label.copy()
             label[mask] = len(parts)
@@ -850,6 +953,31 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
             notes.append(f"part '{part['name']}' got no pixels: check its shapes, cells and colours")
     _check_skips(p, parts, masks, notes)
     _check_stand(p, parts, label, notes)
+    # ---- the other sprites as reference: where each part is in them
+    views: dict[str, View] = {}
+    if sprites and any(part.get("front") or part.get("back") for part in parts):
+        letters, _ = fill_letters(p, sprites)
+        for role in ("front", "back"):
+            try:
+                view = read_view(role, sprites.get(role), parts, letters)
+            except PlanError as e:
+                raise PlanError(f"in the {role} sprite: {e}") from None
+            if view is not None:
+                views[role] = view
+        for k, part in enumerate(parts):
+            for role in ("front", "back"):
+                if part.get(role) and part["type"] not in ("skip", "decal") and not (role in views and views[role].has(k)):
+                    notes.append(f"'{part['name']}': its shapes in the {role} sprite caught nothing; it is built from its numbers")
+
+    def across(k: int) -> Optional[View]:
+        """The sprite that says how part ``k`` is built across the body: the front one, or the back one."""
+        return next((views[role] for role in ("front", "back") if role in views and views[role].has(k)), None)
+
+    def heights(m: np.ndarray) -> tuple[np.ndarray, int, int]:
+        """For a part's pixels: how far down the part each row is (0 its top row, 1 its bottom row)."""
+        rows = np.nonzero(m.any(axis=1))[0]
+        r0, r1 = int(rows[0]), int(rows[-1])
+        return (np.arange(h) - r0) / max(1, r1 - r0), r0, r1
     lateral_px = np.zeros((h, w), bool)
     for k, part in enumerate(parts):
         if part["type"] in LATERAL:
@@ -921,6 +1049,29 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
                 hk = hk * (float(parts[k]["width"]) / 2.0) / float(hk.max())
             half[k] = np.where(full[k], np.maximum(1.0, hk), 0)
             parts[k]["width_built"] = int(2 * round(float(half[k].max())))
+    for k in solid_ids:
+        view = across(k)
+        if view is None:
+            continue
+        m = full[k]
+        t, r0, r1 = heights(m)
+        parts[k]["rows_side"] = [r0, r1]
+        if parts[k].get("width"):
+            continue                                       # a width asked for by hand keeps the round form
+        # the part as the two sprites draw it: at every height as deep as the side sprite says and as wide as the
+        # other one says, with a round section between the two (an ellipse over each run of the profile's row)
+        _, wide = view.at(k, t)
+        hk = np.zeros((h, w), np.float64)
+        for r in range(r0, r1 + 1):
+            cs = np.nonzero(m[r])[0]
+            if not len(cs):
+                continue
+            for run in np.split(cs, np.nonzero(np.diff(cs) > 1)[0] + 1):
+                u = (run - (run[0] + run[-1]) / 2.0) / (len(run) / 2.0)
+                hk[r, run] = wide[r] * np.sqrt(np.clip(1.0 - u * u, 0.0, 1.0))
+        half[k] = np.where(m, np.maximum(1.0, hk), 0)
+        parts[k]["width_built"] = int(2 * round(float(half[k].max())))
+        parts[k]["across"] = view.role
     body_half = half[solid_ids].max(axis=0) if solid_ids else np.zeros((h, w))
 
     def body_half_at(c: float, r: float, reach: int = 2) -> float:
@@ -930,14 +1081,37 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
         return float(sub.max()) if sub.size and sub.max() > 0 else 0.0
 
     rr, cc = np.mgrid[0:h, 0:w].astype(np.float64)
+    planform: dict[int, dict[str, Any]] = {}               # wings built from their outline in the front or back sprite
     for k, part in enumerate(parts):
         if not part["pixels"]:
             continue
         kind, m = part["type"], full[k]
         if kind == "fin":
+            view = across(k)
             t = max(2.0, float(part.get("thickness") or 2))
-            half[k] = np.where(m, t / 2.0, 0)
+            part["thickness"] = t
+            hk = np.where(m, t / 2.0, 0)
+            if view is not None:
+                # a plume that the other sprite draws wide is not a ball: it stays a thin slab along the body and
+                # gets a second thin slab across it, as wide at every height as that sprite draws it, through the
+                # middle of the first (two crossed blades hold both drawings)
+                tt, r0, r1 = heights(m)
+                _, wide = view.at(k, tt)
+                for r in range(r0, r1 + 1):
+                    cs = np.nonzero(m[r])[0]
+                    if not len(cs):
+                        continue
+                    mid_c = (cs[0] + cs[-1]) / 2.0
+                    blade = cs[np.abs(cs - mid_c) <= max(0.5, t / 2.0 - 0.5)]
+                    hk[r, blade] = np.maximum(hk[r, blade], wide[r])
+                part["across"], part["rows_side"] = view.role, [r0, r1]
+                part["width_built"] = int(2 * round(float(hk.max())))
+            half[k] = hk
         elif kind == "fan":
+            view = across(k)
+            if view is not None and not part.get("width"):
+                part["width"] = round(2 * float(view.outer[k].max()), 1)                     # its far end, as that sprite draws it
+                part["across"] = view.role
             root = part.get("root")
             if root is None:
                 root = _auto_root(m, solid_union)
@@ -970,7 +1144,7 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
             if part.get("width") and float(hk[m].max()) > 0.5:
                 hk = hk * (float(part["width"]) / 2.0) / float(hk[m].max())
             half[k] = np.where(m, np.maximum(1.0, hk), 0)
-            part["root_used"], part["base_used"] = [round(float(root[0]), 1), round(float(root[1]), 1)], round(float(base_w), 1)
+            part["root_used"], part["base_used"] = [round(float(w - 1 - root[0] if p.flipped else root[0]), 1), round(float(root[1]), 1)], round(float(base_w), 1)
             part["width_built"] = int(2 * round(float(half[k].max())))
         elif kind == "pair":
             root = part.get("root")
@@ -989,14 +1163,27 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
                     a = float(part["width"]) / 2.0 / max(0.5, float(b[m].max()))
                 hw = np.where(m, np.maximum(1.0, a * b), 0)
             off = part.get("offset")
-            if off is None:
-                # sit on the flank of the body where the limb joins, half sunk in
-                off = max(float(hw.max()), body_half_at(root[0], root[1]) - 0.3 * float(hw.max()))
-            lean = float(part.get("lean") or 0.0)
-            dist_root = np.hypot(cc - root[0], rr - root[1])
-            centre[k] = np.where(m, np.maximum(hw, float(off) + lean * dist_root), 0)
-            half[k] = hw
-            part["root_used"], part["offset_used"] = [round(float(root[0]), 1), round(float(root[1]), 1)], round(float(off), 1)
+            view = across(k)
+            if view is not None and off is None and not part.get("width") and not part.get("thickness"):
+                # the two of them as that sprite draws them: at every height that far from the middle and that thick
+                t, r0, r1 = heights(m)
+                near, far_ = view.at(k, t)
+                thick = np.maximum(1.0, (far_ - near) / 2.0)[:, None] + np.zeros((1, w))
+                mid_line = np.maximum(thick, ((near + far_) / 2.0)[:, None] + np.zeros((1, w)))
+                centre[k] = np.where(m, mid_line, 0)
+                half[k] = np.where(m, thick, 0)
+                off = float(mid_line[m].mean())
+                part["across"], part["rows_side"] = view.role, [r0, r1]
+                part["width_built"] = int(round(2 * float(thick[m].max())))
+            else:
+                if off is None:
+                    # sit on the flank of the body where the limb joins, half sunk in
+                    off = max(float(hw.max()), body_half_at(root[0], root[1]) - 0.3 * float(hw.max()))
+                lean = float(part.get("lean") or 0.0)
+                dist_root = np.hypot(cc - root[0], rr - root[1])
+                centre[k] = np.where(m, np.maximum(hw, float(off) + lean * dist_root), 0)
+                half[k] = hw
+            part["root_used"], part["offset_used"] = [round(float(w - 1 - root[0] if p.flipped else root[0]), 1), round(float(root[1]), 1)], round(float(off), 1)
         elif kind == "wings":
             root = part.get("root")
             if root is None:
@@ -1004,32 +1191,85 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
             elif p.flipped:
                 root = [w - 1 - root[0], root[1]]
             t = max(2.0, float(part.get("thickness") or 2))
+            view = across(k)
+            if view is not None and not part.get("span") and part.get("out_up") is None and part.get("out_back") is None:
+                # The front and back sprites are drawn from above: what they show of a wing is its upper face, the
+                # whole outline of it laid out to each side. The side sprite cannot show a spread wing (it would be a
+                # line), so it draws it raised. The sheet is therefore that outline, set from the root along the body
+                # where the side sprite has the wing, and raised towards its tips as high as the side sprite raises
+                # it (or lowered, for a flipper that hangs below its root). Its pixels in the profile build nothing.
+                rs_, cs_ = np.nonzero(m)
+                above = float((root[1] - rs_).sum()) >= 0
+                rise = float(root[1] - rs_.min()) if above else -float(rs_.max() - root[1])
+                lab_ = view.label == k + 1
+                vr0, vr1 = view.rows[k]
+                out_ = np.abs(np.arange(lab_.shape[1]) - view.axis)
+                inner_rows = [r for r in range(vr0, vr1 + 1) if lab_[r].any() and out_[lab_[r]].min() <= view.inner[k].min() + 1.5]
+                # one row of the drawing is this many voxels along the body: the wing is as long there as in the profile
+                scale = max(1.0, float(cs_.max() - cs_.min())) / max(1.0, float(vr1 - vr0))
+                sign = 1.0 if view.role == "front" else -1.0   # down the drawing is towards the camera: forwards from the front
+                at = float(np.mean(inner_rows)) if inner_rows else (vr0 + vr1) / 2.0
+                planform[k] = {"view": view, "root_col": float(root[0]), "root_row": float(root[1]), "rise": rise, "thick": int(round(t)),
+                               "at": at, "scale": scale, "sign": sign,
+                               "reach": (float(root[0]) + sign * (vr0 - at) * scale, float(root[0]) + sign * (vr1 - at) * scale)}
+                part["across"], part["flat"], part["rise"] = view.role, True, round(rise, 1)
+                part["root_used"] = [round(float(w - 1 - root[0] if p.flipped else root[0]), 1), round(float(root[1]), 1)]
+                part["span_built"] = int(round(2 * float(view.outer[k].max())))
+                continue
             off = part.get("offset")
             if off is None:
                 off = max(t / 2.0, body_half_at(root[0], root[1]) - t / 2.0)
             if part.get("out_up") is None and part.get("out_back") is None:
                 up, back = WING_OPENING            # nobody said how it opens (see tune_wings)
+                found = True
             else:
                 up, back = float(part.get("out_up") or 0.0), float(part.get("out_back") or 0.0)
+                found = part.get("opening") is not None
+            if found:
+                # an opening Seurat chose says how far from straight up; which way is the sheet's own: a wing rises
+                # behind its shoulder, a flipper or a fin at the side hangs below its root, an arm can reach forward
+                above = float(((root[1] - rr) * m).sum())
+                behind = float(((root[0] - cc) * m).sum())
+                span_v = float(np.abs((root[1] - rr) * m).sum())
+                span_h = float(np.abs((root[0] - cc) * m).sum())
+                if above < -0.25 * span_v:
+                    up = -abs(up)
+                    part["hangs"] = True
+                if behind < -0.25 * span_h:
+                    back = -abs(back)
+                    part["forward"] = True
             # a flat sheet hinged at the root: what lies before the hinge stays against the flank
-            gain = np.maximum(0.0, up * (root[1] - rr) + back * (root[0] - cc))
-            if part.get("span") and float(gain[m].max()) > 1e-6:
-                # the wingspan is given: keep the direction the sheet opens in, scale how fast
-                grow = max(0.0, (float(part["span"]) / 2.0 - float(off) - t / 2.0)) / float(gain[m].max())
-                up, back, gain = up * grow, back * grow, gain * grow
-                part["out_up_used"], part["out_back_used"] = round(up, 3), round(back, 3)
-            c_line = float(off) + gain
-            curl = float(part.get("curl") or 0.0)
-            if curl:
-                reach = np.hypot(cc - root[0], rr - root[1])
-                c_line = c_line + curl * (reach / max(1.0, float(reach[m].max()))) ** 2 * float(reach[m].max())
-            c_line = np.maximum(c_line, t / 2.0)
-            # a tilted sheet steps sideways between neighbouring pixels: thicken it by that step so it has no holes
-            step = max(abs(up), abs(back))
-            hw = t / 2.0 + max(0.0, step - 1.0) / 2.0
+            unit = np.maximum(0.0, up * (root[1] - rr) + back * (root[0] - cc))
+            up0, back0 = up, back
+            auto_off = part.get("offset") is None
+            pad_b = np.pad(body_half, 1)
+            beside = np.max([pad_b[1 + dy: 1 + dy + h, 1 + dx: 1 + dx + w] for dy in (-1, 0, 1) for dx in (-1, 0, 1)], axis=0)
+            contact = m & (beside > 0)
+            for attempt in range(2):
+                up, back, gain = up0, back0, unit
+                if part.get("span") and float(gain[m].max()) > 1e-6:
+                    # the wingspan is given: keep the direction the sheet opens in, scale how fast
+                    grow = max(0.0, (float(part["span"]) / 2.0 - float(off) - t / 2.0)) / float(gain[m].max())
+                    up, back, gain = up * grow, back * grow, gain * grow
+                    part["out_up_used"], part["out_back_used"] = round(up, 3), round(back, 3)
+                c_line = float(off) + gain
+                curl = float(part.get("curl") or 0.0)
+                if curl:
+                    reach = np.hypot(cc - root[0], rr - root[1])
+                    c_line = c_line + curl * (reach / max(1.0, float(reach[m].max()))) ** 2 * float(reach[m].max())
+                c_line = np.maximum(c_line, t / 2.0)
+                # a tilted sheet steps sideways between neighbouring pixels: thicken it by that step so it has no holes
+                step = max(abs(up), abs(back))
+                hw = t / 2.0 + max(0.0, step - 1.0) / 2.0
+                # the sheet starts on the body: where the two meet in the profile the body can be thinner than at
+                # the root (a flipper under a round belly), and the sheet would hang in the air beside it
+                gap = float(((c_line - hw) - beside)[contact].min()) + 1.0 if contact.any() else 0.0     # a voxel of overlap
+                if attempt or not auto_off or gap <= 0.0 or float(off) <= t / 2.0:
+                    break
+                off = max(t / 2.0, float(off) - gap)
             centre[k] = np.where(m, c_line, 0)
             half[k] = np.where(m, hw, 0)
-            part["root_used"], part["offset_used"] = [round(float(root[0]), 1), round(float(root[1]), 1)], round(float(off), 1)
+            part["root_used"], part["offset_used"] = [round(float(w - 1 - root[0] if p.flipped else root[0]), 1), round(float(root[1]), 1)], round(float(off), 1)
             part["span_built"] = int(round(2 * float((c_line[m] + hw).max())))
     # ---- colours
     palette = list(p.palette)
@@ -1048,15 +1288,20 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
             palette.append(hexc)
         return palette.index(hexc) + 1
 
+    beside_idx = _inpaint(p.idx, p.mask & ~p.ink, p.mask)
     for k, part in enumerate(parts):
         if not part["pixels"] or part["type"] in ("decal", "skip"):
             continue
         known = masks[k] & ~p.ink & ~decal_px
-        if not known.any():
-            known = masks[k] & ~decal_px
-        if not known.any():
-            known = masks[k]
-        base_idx[k] = _inpaint(p.idx, known, full[k])
+        if known.any():
+            base = _inpaint(p.idx, known, full[k])
+            # a piece of the part that is all lines (a thin streamer cut off from the rest) takes the part's main colour
+            base[full[k] & (base == 0)] = int(np.bincount(p.idx[known]).argmax())
+        else:
+            base = np.where(full[k], beside_idx, 0)        # a part of lines only: the colours next to it, never black
+            if not base.any():
+                base = _inpaint(p.idx, masks[k], full[k])
+        base_idx[k] = base
     # what the surface shows at each sprite pixel: the sprite itself, with its ink toned down for 3-D
     owner = np.zeros((h, w), np.int32)                     # the part (not a decal) each visible pixel lies on
     skipped = np.zeros((h, w), bool)
@@ -1073,9 +1318,15 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
                     owner[masks[k] & full[j] & (owner == 0)] = j + 1
     owner = grow_labels(owner, p.mask & ~skipped)
     surface = p.idx.copy()
-    ink_mode = str(plan.get("ink") or "soften")
+    ink_mode = str(plan.get("ink") or "clean")
     # a decal keeps its own dark pixels (a pupil), but the line that outlines it is ink like any other
     decal_edge = decal_px & p.ink & _neigh4(p.mask & ~decal_px)
+    # the lines of the drawing (the outline, what hangs from it, anything long) against a small dark feature of its own
+    ilab, n_ink = components(p.ink, conn8=True)
+    drawn = np.zeros(n_ink + 1, bool)
+    drawn[np.unique(ilab[p.rim])] = True
+    drawn |= np.bincount(ilab.ravel(), minlength=n_ink + 1) > 6
+    drawn[0] = False
     rs, cs = np.nonzero(p.ink & (~decal_px | decal_edge))
     for r, c in zip(rs, cs):
         k = owner[r, c] - 1
@@ -1086,19 +1337,24 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
             surface[r, c] = int(p.idx[r, c]) if outline == "keep" else (shade_of(b, 0.72) if outline == "shade" else b)
         elif ink_mode == "soften":
             surface[r, c] = shade_of(b, 0.62)
-        elif ink_mode == "drop":
-            surface[r, c] = b
+        elif ink_mode == "drop" or (ink_mode == "clean" and drawn[ilab[r, c]]):
+            surface[r, c] = b                      # a sculpt has no drawn lines: the colour of the part there
     # ---- the grid
     reach = 1.0
     for k, part in enumerate(parts):
         if part["pixels"]:
             reach = max(reach, float((centre[k] + half[k]).max()))
+    for k, pw in planform.items():
+        reach = max(reach, float(pw["view"].outer[k].max()) + 1.0)
     hx = int(math.ceil(reach)) + margin
     X = min(MAX_SIDE, 2 * hx)
     X += X % 2
     Y = min(MAX_SIDE, h + 2 * margin)
-    Z = min(MAX_SIDE, w + 2 * margin)
-    cx, z0, y0 = X // 2, (Z - w) // 2, margin
+    # a wing laid out from its own drawing can reach past the ends of the profile
+    ahead = max([0.0] + [max(pw["reach"]) - (w - 1) for pw in planform.values()])
+    behind_ = max([0.0] + [-min(pw["reach"]) for pw in planform.values()])
+    Z = min(MAX_SIDE, w + 2 * margin + int(math.ceil(ahead)) + int(math.ceil(behind_)))
+    cx, z0, y0 = X // 2, min(Z - w, margin + int(math.ceil(behind_))), margin
     pid = np.zeros((X, Y, Z), np.uint8)                     # which part each voxel belongs to (1-based)
     yy = (y0 + (h - 1 - np.arange(h)))                      # grid y of each sprite row
     zz = z0 + np.arange(w)
@@ -1125,6 +1381,8 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
              + [k for k, part in enumerate(parts) if part["type"] == "wings" and part["pixels"]])
     for k in order:
         part, m = parts[k], full[k]
+        if k in planform:
+            continue                                        # laid out below from its own drawing
         if part["type"] in MEDIAN:
             n = np.maximum(1, np.rint(half[k])).astype(np.int64)
             put(cx - n, cx + n - 1, m, k)
@@ -1139,52 +1397,83 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
                 put(lo_near, hi_near, m, k)
             if side in ("both", "far"):
                 put(2 * cx - 1 - hi_near, 2 * cx - 1 - lo_near, m, k)
-    # ---- nothing floats: a wing or a limb that ends up beside the body without touching it (the body is rounder than
-    # the sheet is close) is joined to the middle plane where the two meet in the profile
-    body_px = np.zeros((h, w), bool)
-    for k in median_ids:
-        body_px |= full[k]
-    bp = np.pad(body_px, 1)
-    near_body = (bp[:-2, :-2] | bp[:-2, 1:-1] | bp[:-2, 2:] | bp[1:-1, :-2] | bp[1:-1, 1:-1] | bp[1:-1, 2:] | bp[2:, :-2] | bp[2:, 1:-1] | bp[2:, 2:])
+    # ---- wings laid out from their own drawing
+    direct: dict[tuple[int, int, int], str] = {}           # voxels that carry their own colour (not a side-sprite pixel's)
+    flat_px = np.zeros((h, w), bool)
+    for k, pw in planform.items():
+        view = pw["view"]
+        flat_px |= masks[k]
+        lab = view.label == k + 1
+        r0, r1 = view.rows[k]
+        colours = undrawn(view.profile.rgba)
+        vw = lab.shape[1]
+        dist = np.arange(vw) - view.axis
+        whole = float(view.axis).is_integer()
+        out_i = (np.abs(dist) if whole else np.floor(np.abs(dist))).astype(np.int64)       # voxels out from the middle
+        used = out_i[lab.any(axis=0)]
+        x_in, x_out = int(used.min()), int(used.max())
+        y_root = y0 + (h - 1 - pw["root_row"])
+        lo, hi = sorted(pw["reach"])
+        for zc in range(int(math.floor(lo)), int(math.ceil(hi)) + 1):                      # columns of the profile, may run past it
+            # the row of the drawing that lies there: its inner end sits at the root, where the wing joins the body
+            vr = int(round(pw["at"] + pw["sign"] * (zc - pw["root_col"]) / pw["scale"]))
+            gz = z0 + zc
+            if not (r0 <= vr <= r1 and 0 <= gz < Z):
+                continue
+            for vc in np.nonzero(lab[vr])[0]:
+                i = int(out_i[vc])
+                lift = int(round(y_root + pw["rise"] * (i - x_in) / max(1, x_out - x_in)))
+                right = dist[vc] > 0 if view.role == "front" else dist[vc] < 0
+                xs = [cx + i, cx - 1 - i] if dist[vc] == 0 else ([cx + i] if right else [cx - 1 - i])
+                hexc = _hex(colours[vr, vc])
+                for x in xs:
+                    for y in range(lift, lift + pw["thick"]):
+                        if 0 <= x < X and 0 <= y < Y and pid[x, y, gz] == 0:
+                            pid[x, y, gz] = k + 1
+                            direct[(x, y, gz)] = hexc
+    # ---- nothing floats: a wing, a limb or a streamer that ends up beside the body without touching it (the body is
+    # rounder than the part is close, or the part is a few stray pixels) is brought in towards the middle plane until
+    # it touches the body or something that hangs from it. Its place in the profile does not change.
     solids = [k + 1 for k in median_ids if parts[k]["type"] == "solid"]
-    for _ in range(4):                                   # a part can float in several pieces
-        loose = _floating(pid, solids) if body_px.any() else None
+
+    def around(a: np.ndarray) -> np.ndarray:
+        for axis in range(3):                            # the 26 neighbours, one axis at a time
+            lo, hi = [slice(None)] * 3, [slice(None)] * 3
+            lo[axis], hi[axis] = slice(1, None), slice(None, -1)
+            step = a.copy()
+            step[tuple(lo)] |= a[tuple(hi)]
+            step[tuple(hi)] |= a[tuple(lo)]
+            a = step
+        return a
+
+    for _ in range(8):                                   # a part can float in several pieces, one behind another
+        loose = _floating(pid, solids) if solids else None
         if loose is None or not loose.any():
             break
-        joined = False
+        held = around((pid > 0) & ~loose)
+        moved = False
         for k, part in enumerate(parts):
             if part["type"] not in ("pair", "wings"):
                 continue
-            mine = loose & (pid == k + 1)
-            if int(mine.sum()) < 6:
-                continue
-            # the sprite pixels whose voxels float, and of those the ones that meet the body in the profile
-            px = np.zeros((h, w), bool)
-            vy, vz = np.nonzero(mine.any(axis=0))
-            rr_, cc_ = (h - 1) - (vy - y0), vz - z0
-            ok = (rr_ >= 0) & (rr_ < h) & (cc_ >= 0) & (cc_ < w)
-            px[rr_[ok], cc_[ok]] = True
-            touch = px & full[k] & near_body
-            if not touch.any():
-                continue
-            inner = centre[k] - half[k]
-            join = touch & (inner <= float(inner[touch].min()) + 1.0)
-            outer = np.rint(cx - centre[k] - half[k]).astype(np.int64)
-            mid = np.full((h, w), cx - 1, np.int64)
-            side = part.get("side") or "both"
-            if side in ("both", "near"):
-                put(np.minimum(outer, mid), mid, join, k)
-            if side in ("both", "far"):
-                put(2 * cx - 1 - mid, 2 * cx - 1 - np.minimum(outer, mid), join, k)
-            part["joined"] = int(part.get("joined") or 0) + int(join.sum())
-            joined = True
-            gap = float(inner[join].min())
-            if gap > 3.5 and not part.get("bridged"):
-                part["bridged"] = True
-                notes.append(f"'{part['name']}' did not touch the body: Seurat joined it with a bar {gap:.0f} voxels long. Its shape "
-                             f"probably misses the pixels that take it down to where it hangs from the body (a wing covers the "
-                             f"shoulder too), or the body took them")
-        if not joined:
+            for sign in (1, -1):                         # the near side moves up in x, the far side down
+                mine = loose & (pid == k + 1)
+                if sign > 0:
+                    mine[cx:] = False
+                else:
+                    mine[:cx] = False
+                if not mine.any():
+                    continue
+                xs = np.nonzero(mine.any(axis=(1, 2)))[0]
+                room = int(cx - 1 - xs.max()) if sign > 0 else int(xs.min() - cx)
+                for dist in range(1, room + 1):
+                    there = np.roll(mine, sign * dist, axis=0)
+                    if (there & held).any():
+                        pid[mine] = 0
+                        pid[there & (pid == 0)] = k + 1
+                        part["settled"] = max(int(part.get("settled") or 0), dist)
+                        moved = True
+                        break
+        if not moved:
             break
     # ---- colour: what is exposed shows the sprite, what is inside (or hidden behind another part in the sprite) shows
     # the part's own colour
@@ -1203,11 +1492,33 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
     col = np.where(col > 0, col, p.idx[vr, vc])
     grid = np.zeros((X, Y, Z), np.uint8)
     grid[vx, vy, vz] = np.clip(col, 1, 255).astype(np.uint8)
-    # ---- the flank is the sprite, exactly: the first voxel met from each side takes the sprite's pixel
-    any_col = occ.any(axis=0)                               # (Y, Z)
-    first = occ.argmax(axis=0)
-    last = X - 1 - occ[::-1].argmax(axis=0)
-    rs, cs = np.nonzero(p.mask & ~skipped)
+    # ---- the flank is the sprite, exactly: the first voxel met from each side takes the sprite's pixel (of what was
+    # built from the profile: a wing laid out from its own drawing keeps that drawing's colours)
+    flat_ids = [k + 1 for k in planform]
+    cols_occ = occ & ~np.isin(pid, flat_ids) if flat_ids else occ
+    if flat_ids:
+        for (x, y, z), hexc in direct.items():
+            if pid[x, y, z] not in flat_ids:
+                continue                                    # moved since (brought in to touch the body)
+            if hexc not in palette:
+                if len(palette) >= 255:
+                    continue
+                palette.append(hexc)
+            grid[x, y, z] = palette.index(hexc) + 1
+        # a sheet moved towards the body lost its place: its voxels take the nearest colour of the sheet
+        moved = np.argwhere(np.isin(pid, flat_ids))
+        lost = [tuple(v) for v in moved if tuple(int(a) for a in v) not in direct]
+        if lost and direct:
+            keys = np.array(list(direct.keys()))
+            vals = list(direct.values())
+            for v in lost:
+                near = int(np.abs(keys[:, 1:] - np.array(v[1:])).sum(axis=1).argmin())
+                if vals[near] in palette:
+                    grid[v[0], v[1], v[2]] = palette.index(vals[near]) + 1
+    any_col = cols_occ.any(axis=0)                          # (Y, Z)
+    first = cols_occ.argmax(axis=0)
+    last = X - 1 - cols_occ[::-1].argmax(axis=0)
+    rs, cs = np.nonzero(p.mask & ~skipped & ~flat_px)
     gy, gz = yy[rs], zz[cs]
     ok = any_col[gy, gz]
     grid[first[gy[ok], gz[ok]], gy[ok], gz[ok]] = surface[rs[ok], cs[ok]]
@@ -1218,9 +1529,10 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
     if missing:
         notes.append(f"{missing} sprite pixels got no voxel")
     for part in parts:
-        part.pop("where", None)
+        for key in ("where", "front", "back"):
+            part.pop(key, None)
     _check_floating(grid, pid, parts, notes)
-    return Built(grid, palette, label, {"z0": z0, "y0": y0, "cx": cx, "w": w, "h": h}, parts, notes, pid)
+    return Built(grid, palette, label, {"z0": z0, "y0": y0, "cx": cx, "w": w, "h": h, "flipped": bool(p.flipped)}, parts, notes, pid, views)
 
 
 # ---------------------------------------------------------------------------------------------- the game camera
@@ -1444,7 +1756,8 @@ def tune_wings(p: Profile, plan: dict[str, Any], sprites: dict[str, np.ndarray],
     not changed, so it is tuned again when something else moves)."""
     import copy
     import math
-    todo = [k for k, part in enumerate(plan["parts"]) if part["type"] == "wings" and part.get("out_up") is None and part.get("out_back") is None]
+    todo = [k for k, part in enumerate(plan["parts"]) if part["type"] == "wings" and part.get("out_up") is None and part.get("out_back") is None
+            and not any(part.get(role) and sprites.get(role) is not None for role in ("front", "back"))]     # those follow their own sprite
     if not todo or not any(sprites.get(r) is not None for r in ("front", "back")):
         return plan
     fam = fam or families_of(*[sprites.get(r) for r in ("side", "front", "back")])
@@ -1455,7 +1768,7 @@ def tune_wings(p: Profile, plan: dict[str, Any], sprites: dict[str, np.ndarray],
             up, back = round(math.cos(math.radians(deg)), 3), round(math.sin(math.radians(deg)), 3)
             plan["parts"][k]["out_up"], plan["parts"][k]["out_back"] = up, back
             try:
-                built = build(p, plan)
+                built = build(p, plan, sprites=sprites)
             except PlanError:
                 raise
             views = evaluate(built, sprites, tune_camera(built, sprites, fam), fam=fam)["views"]
@@ -1553,7 +1866,7 @@ def paint_caps(built: Built, sprites: dict[str, np.ndarray], depths: dict[str, f
                 grid[x, y, z] = new
                 changed += 1
         part["painted"] = role
-    return changed + paint_faces(built, sprites, depths, fam, side_seen)
+    return changed + paint_views(built) + paint_faces(built, sprites, depths, fam, side_seen)
 
 
 def surface_normals(occ: np.ndarray, reach: int = 2) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1572,6 +1885,130 @@ def surface_normals(occ: np.ndarray, reach: int = 2) -> tuple[np.ndarray, np.nda
                 out[1] -= dy * near
                 out[2] -= dz * near
     return out[0], out[1], out[2]
+
+
+def _drawing(sprite: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(opaque, line, rim) of a sprite: ``line`` is the ink that draws (the outline and the lines that hang from it,
+    or long ones), not a small dark feature of its own (a pupil, a nostril); ``rim`` the pixels on the figure's edge."""
+    opaque = sprite[..., 3] >= 128
+    inks = {tuple(c) for c in ink_colours(sprite)}
+    ink = opaque & np.array([[tuple(int(v) for v in px[:3]) in inks for px in row] for row in sprite])
+    pad = np.pad(opaque, 1)
+    rim = opaque & ~(pad[:-2, 1:-1] & pad[2:, 1:-1] & pad[1:-1, :-2] & pad[1:-1, 2:])
+    lab, n = components(ink, conn8=True)
+    lines = np.zeros(n + 1, bool)
+    lines[np.unique(lab[rim & ink])] = True
+    lines |= np.bincount(lab.ravel(), minlength=n + 1) > 6
+    lines[0] = False
+    return opaque, ink & lines[lab], rim
+
+
+def undrawn(sprite: np.ndarray, opaque: Optional[np.ndarray] = None, line: Optional[np.ndarray] = None) -> np.ndarray:
+    """The sprite without the lines of its drawing: every line pixel takes the colour next to it. Small dark features
+    (a pupil) stay."""
+    if opaque is None or line is None:
+        opaque, line, _ = _drawing(sprite)
+    cols, inv = np.unique(sprite[..., :3].reshape(-1, 3), axis=0, return_inverse=True)
+    idx = (inv.reshape(opaque.shape) + 1) * opaque
+    lab = grow_labels(np.where(opaque & ~line, idx, 0).astype(np.int32), opaque)
+    lab = np.where(opaque & (lab == 0), idx, lab)
+    out = np.zeros_like(sprite)
+    out[opaque, :3] = cols[lab[opaque] - 1]
+    out[opaque, 3] = 255
+    return out
+
+
+def paint_views(built: Built) -> int:
+    """What each part shows to the front and to the back comes from its own place in that sprite (``Built.views``),
+    whatever pose the rest of the figure holds there: the part's rows in the sprite are laid over its rows in the
+    model, its columns to each side of the middle plane. A solid takes it where its surface looks at that camera, a
+    limb on its whole front. Lines are toned down, the outline is left out, a small dark spot (a pupil) is kept.
+    Returns how many voxels changed."""
+    if built.pid is None or not built.views:
+        return 0
+    grid, pid = built.grid, built.pid
+    X, Y, Z = grid.shape
+    cx, y0, h = built.place["cx"], built.place["y0"], built.place["h"]
+    occ = grid > 0
+    nx, _, nz = surface_normals(occ)
+    any_col = occ.any(axis=2)
+    changed = 0
+    for role, view in built.views.items():
+        sprite = view.profile.rgba
+        opaque, line, rim = _drawing(sprite)
+        clean = undrawn(sprite, opaque, line)
+        th, tw = opaque.shape
+        # the voxel that camera meets first along each line of sight straight on
+        if role == "front":
+            seen_z = Z - 1 - occ[:, :, ::-1].argmax(axis=2)
+        else:
+            seen_z = occ.argmax(axis=2)
+        xs, ys = np.nonzero(any_col)
+        zs = seen_z[xs, ys]
+        ks = pid[xs, ys, zs].astype(np.int64) - 1
+        done: dict[int, int] = {}
+        for x, y, z, k in zip(xs, ys, zs, ks):
+            if k < 0 or not view.has(int(k)):
+                continue
+            part = built.parts[k]
+            if part["type"] not in ("solid", "pair") or str(part.get("paint") or "auto") == "none" or not part.get("rows_side"):
+                continue
+            if part["type"] == "solid" and not (nz[x, y, z] if role == "front" else -nz[x, y, z]) > abs(nx[x, y, z]):
+                continue                                      # its flanks stay the side sprite's
+            s0, s1 = part["rows_side"]
+            r0, r1 = view.rows[int(k)]
+            r = (h - 1) - (int(y) - y0)
+            vr = int(round(r0 + min(1.0, max(0.0, (r - s0) / max(1, s1 - s0))) * (r1 - r0)))
+            d = (int(x) - cx + 0.5) * (1 if role == "front" else -1)
+            vc = int(np.floor(view.axis + d)) if d > 0 else int(np.ceil(view.axis + d))
+            if not (0 <= vr < th and 0 <= vc < tw) or view.label[vr, vc] != k + 1 or (rim[vr, vc] and line[vr, vc]):
+                continue
+            cur = int(grid[x, y, z])
+            hexc = _hex(clean[vr, vc])
+            if hexc not in built.palette:
+                if len(built.palette) >= 255:
+                    continue
+                built.palette.append(hexc)
+            new = built.palette.index(hexc) + 1
+            if new != cur:
+                grid[x, y, z] = new
+                changed += 1
+                done[int(k)] = done.get(int(k), 0) + 1
+        for k in done:
+            part = built.parts[k]
+            part["faces"] = (part.get("faces", "") + " " + role).strip()
+    return changed
+
+
+def _band_pose(index: np.ndarray, pid: np.ndarray, k: int, opaque: np.ndarray, shift: tuple[int, int],
+               search: int = 2) -> Optional[tuple[int, int]]:
+    """Whether a sprite shows part ``k`` as the model has it, whatever the rest of the figure does: over the rows the
+    part takes in the model's projection (``index``), the two silhouettes overlap at least ``FACE_IOU`` at some
+    placement within ``search`` pixels of the whole figure's. Returns that placement (shift x, y) or None."""
+    seen = index[..., 0] >= 0
+    part = seen & (pid[index[..., 0].clip(0), index[..., 1].clip(0), index[..., 2].clip(0)] == k)
+    rows = np.nonzero(part.any(axis=1))[0]
+    if rows.size < 4 or part.sum() < 24:
+        return None
+    r0, r1 = int(rows[0]), int(rows[-1])
+    m = seen[r0:r1 + 1]
+    th, tw = opaque.shape
+    best = (FACE_IOU - 1e-6, None)
+    for dy in range(-search, search + 1):
+        for dx in range(-search, search + 1):
+            ox, oy = shift[0] + dx, shift[1] + dy
+            t = np.zeros_like(m)
+            y0, y1 = max(0, r0 + oy), min(th, r1 + 1 + oy)
+            x0, x1 = max(0, ox), min(tw, ox + m.shape[1])
+            if y1 <= y0 or x1 <= x0:
+                continue
+            t[y0 - oy - r0:y1 - oy - r0, x0 - ox:x1 - ox] = opaque[y0:y1, x0:x1]
+            union = int((m | t).sum())
+            iou = int((m & t).sum()) / union if union else 0.0
+            iou -= 1e-3 * (abs(dx) + abs(dy))
+            if iou > best[0]:
+                best = (iou, (ox, oy))
+    return best[1]
 
 
 def paint_faces(built: Built, sprites: dict[str, np.ndarray], depths: dict[str, float], fam: Families,
@@ -1598,12 +2035,24 @@ def paint_faces(built: Built, sprites: dict[str, np.ndarray], depths: dict[str, 
         img, index = project(grid, palette_rgb(built.palette), role, float(depths.get(role, 0.5)), with_index=True)
         res = compare(img, sprite, fam)
         same_pose = res["iou"] >= FACE_IOU
-        wanted = {k for k, v in solids.items() if v in (role, "both") or (v == "auto" and same_pose)}
-        if not wanted:
-            continue
         ox, oy = res["shift"]
         th, tw = sprite.shape[:2]
         opaque = sprite[..., 3] >= 128
+        own = built.views.get(role)
+        mine = {k for k in solids if own is not None and own.has(k - 1)}      # painted from their own place in the sprite
+        wanted = {k for k, v in solids.items() if k not in mine and (v in (role, "both") or (v == "auto" and same_pose))}
+        # a sprite in another pose as a whole (arms out, a tail to one side) can still show one part as the model
+        # has it: a head above the arms. Part by part, over the rows the part takes from this camera.
+        shifts: dict[int, tuple[int, int]] = {}
+        if not same_pose:
+            for k, v in solids.items():
+                if v == "auto" and k not in wanted and k not in mine:
+                    local = _band_pose(index, pid, k, opaque, (ox, oy))
+                    if local is not None:
+                        wanted.add(k)
+                        shifts[k] = local
+        if not wanted:
+            continue
         inks = {tuple(c) for c in ink_colours(sprite)}
         ink = opaque & np.array([[tuple(int(v) for v in px[:3]) in inks for px in row] for row in sprite])
         # the outline and the lines that hang from it are drawing; ink that touches neither is a feature of its own
@@ -1620,12 +2069,14 @@ def paint_faces(built: Built, sprites: dict[str, np.ndarray], depths: dict[str, 
         fams: dict[int, set] = {}
         rs, cs = np.nonzero(index[..., 0] >= 0)
         done: dict[int, int] = {}
+        once: set = set()                                      # a voxel can show in two pixels of the camera: the first one paints it
         for r, c in zip(rs, cs):
             x, y, z = (int(v) for v in index[r, c])
             k = int(pid[x, y, z])
-            if k not in wanted or not facing[x, y, z]:
+            if k not in wanted or not facing[x, y, z] or (x, y, z) in once:
                 continue
-            sr, sc = r + oy, c + ox
+            lx, ly = shifts.get(k, (ox, oy))
+            sr, sc = r + ly, c + lx
             if not (0 <= sr < th and 0 <= sc < tw) or not opaque[sr, sc]:
                 continue
             cur = int(grid[x, y, z])
@@ -1635,7 +2086,7 @@ def paint_faces(built: Built, sprites: dict[str, np.ndarray], depths: dict[str, 
                 br, bg, bb = _rgb(built.palette[cur - 1])
                 hexc = "#%02x%02x%02x" % (int(br * 0.62), int(bg * 0.62), min(255, int(bb * 0.66)))
             else:
-                if not same_pose:
+                if not same_pose and k not in shifts:
                     # asked for on a sprite in another pose: only colours this part has, so no wing lands on the chest
                     if k not in fams:
                         fams[k] = {int(pal_cls[i - 1]) for i in np.unique(grid[pid == k]) if i > 0} - {Families.INK}
@@ -1647,6 +2098,7 @@ def paint_faces(built: Built, sprites: dict[str, np.ndarray], depths: dict[str, 
                     continue
                 built.palette.append(hexc)
             new = built.palette.index(hexc) + 1
+            once.add((x, y, z))
             if new != cur:
                 grid[x, y, z] = new
                 changed += 1
@@ -1752,7 +2204,10 @@ def parts_picture(p: Profile, label: np.ndarray, parts: list[dict[str, Any]], zo
         img[m, :3] = PART_COLOURS[k % len(PART_COLOURS)]
         img[m, 3] = 255
     img[p.ink & (img[..., 3] > 0), :3] = (img[p.ink & (img[..., 3] > 0), :3] * 0.62).astype(np.uint8)
-    left, right = _zoomed(p.rgba, zoom), _zoomed(img, zoom)
+    rgba = p.rgba
+    if p.flipped:                                          # the profile is kept facing right: show it as the plan numbers it
+        img, rgba, label = img[:, ::-1], rgba[:, ::-1], label[:, ::-1]
+    left, right = _zoomed(np.ascontiguousarray(rgba), zoom), _zoomed(np.ascontiguousarray(img), zoom)
     pad, ruler = 10, 22
     out = Image.new("RGBA", (ruler + left.width + pad + ruler + right.width + pad, ruler + left.height + pad + 18), (22, 19, 26, 255))
     d = ImageDraw.Draw(out)
@@ -1777,6 +2232,91 @@ def parts_picture(p: Profile, label: np.ndarray, parts: list[dict[str, Any]], zo
         d.text((x, y), text, fill=(255, 255, 255, 255), font=f)
     d.text((ruler, ruler + left.height + 4), "side sprite (columns across, rows down)  |  the same pixels by part", fill=(235, 225, 200, 255), font=f)
     return out
+
+
+def reading_picture(p: Profile, built: Built, zoom: int = 10):
+    """What the plan caught in every sprite: the side sprite and, when parts are placed in them, the front and back
+    sprites, each next to its pixels coloured by part with the parts' names and rulers."""
+    from PIL import Image, ImageDraw
+    tiles = [parts_picture(p, built.label, built.parts, zoom)]
+    f, small = _font(13), _font(10)
+    for role in ("front", "back"):
+        view = built.views.get(role)
+        if view is None:
+            continue
+        vp = view.profile
+        h, w = vp.shape
+        img = np.zeros((h, w, 4), np.uint8)
+        for k in view.rows:
+            m = view.label == k + 1
+            img[m, :3] = PART_COLOURS[k % len(PART_COLOURS)]
+            img[m, 3] = 255
+        nobody = vp.mask & (view.label == 0)
+        img[nobody] = (70, 66, 78, 255)
+        img[vp.ink & (img[..., 3] > 0), :3] = (img[vp.ink & (img[..., 3] > 0), :3] * 0.62).astype(np.uint8)
+        left, right = _zoomed(vp.rgba, zoom), _zoomed(img, zoom)
+        pad, ruler = 10, 22
+        out = Image.new("RGBA", (ruler + left.width + pad + ruler + right.width + pad, ruler + left.height + pad + 18), (22, 19, 26, 255))
+        d = ImageDraw.Draw(out)
+        for ox, pic in ((ruler, left), (ruler + left.width + pad + ruler, right)):
+            out.paste(pic, (ox, ruler))
+            for c in range(0, w, 5):
+                d.text((ox + c * zoom + 1, 8), str(c), fill=(200, 190, 170, 255), font=small)
+                d.line([(ox + c * zoom, ruler - 4), (ox + c * zoom, ruler)], fill=(200, 190, 170, 255))
+            for r in range(0, h, 5):
+                d.text((ox - ruler + 2, ruler + r * zoom), str(r), fill=(200, 190, 170, 255), font=small)
+        ox = ruler + left.width + pad + ruler
+        for k in view.rows:
+            m = view.label == k + 1
+            rs, cs = np.nonzero(m)
+            i = int(np.argmin((rs - rs.mean()) ** 2 + (cs - cs.mean()) ** 2))
+            text = built.parts[k]["name"]
+            x, y = ox + int(cs[i] * zoom) - 3 * len(text), ruler + int(rs[i] * zoom) - 6
+            d.rectangle([x - 2, y - 1, x + 7 * len(text) + 2, y + 13], fill=(0, 0, 0, 150))
+            d.text((x, y), text, fill=(255, 255, 255, 255), font=f)
+        d.text((ruler, ruler + left.height + 4), f"{role} sprite  |  its pixels by part (dark grey: no part placed there)",
+               fill=(235, 225, 200, 255), font=f)
+        tiles.append(out)
+    if len(tiles) == 1:
+        return tiles[0]
+    sheet = Image.new("RGBA", (max(t.width for t in tiles), sum(t.height for t in tiles) + 6 * (len(tiles) - 1)), (12, 10, 14, 255))
+    y = 0
+    for t in tiles:
+        sheet.paste(t, (0, y))
+        y += t.height + 6
+    return sheet
+
+
+def sides_picture(built: Built, sprites: dict[str, np.ndarray], depths: dict[str, float], zoom: int = 6):
+    """Each sprite next to the model seen from that sprite's side: to look at, not to measure. The side one straight
+    on, the front and back ones from their cameras."""
+    from PIL import Image, ImageDraw
+    rgb = palette_rgb(built.palette)
+    f = _font(13)
+    tiles = []
+    for role in ("side", "front", "back"):
+        t = sprites.get(role)
+        if t is None:
+            continue
+        img = project(built.grid, rgb, role, 0.0 if role == "side" else float(depths.get(role, 0.5)))
+        if role == "side" and built.place.get("flipped"):
+            img = img[:, ::-1]
+        a, b = _zoomed(np.ascontiguousarray(t), zoom), _zoomed(np.ascontiguousarray(img), zoom)
+        tile = Image.new("RGBA", (a.width + b.width + 24, max(a.height, b.height) + 28), (22, 19, 26, 255))
+        d = ImageDraw.Draw(tile)
+        tile.paste(a, (8, 22))
+        tile.paste(b, (a.width + 16, 22))
+        d.text((8, 4), f"{role} sprite", fill=(235, 225, 200, 255), font=f)
+        d.text((a.width + 16, 4), "the model from there", fill=(235, 225, 200, 255), font=f)
+        tiles.append(tile)
+    if not tiles:
+        return None
+    sheet = Image.new("RGBA", (sum(t.width for t in tiles), max(t.height for t in tiles)), (12, 10, 14, 255))
+    x = 0
+    for t in tiles:
+        sheet.paste(t, (x, 0))
+        x += t.width
+    return sheet
 
 
 def match_picture(built: Built, sprites: dict[str, np.ndarray], depths: dict[str, float], fam: Optional[Families] = None,
@@ -1954,14 +2494,23 @@ def report(built: Built) -> str:
         bits = [f"{part['pixels']} px"]
         for key, text in (("width_built", "width"), ("span_built", "span"), ("offset_used", "offset"), ("root_used", "root"),
                           ("out_up_used", "out_up"), ("out_back_used", "out_back"), ("base_used", "base"), ("thickness", "thickness"),
-                          ("on", "on"), ("painted", "end painted from the sprite"),
+                          ("on", "on"), ("settled", "brought in to touch the body, voxels:"), ("painted", "end painted from the sprite"),
                           ("faces", "face painted from the sprite:")):
             if part.get(key) is not None:
                 bits.append(f"{text} {part[key]}")
-        if part["type"] == "wings" and part.get("out_up_used") is None:
+        if part["type"] == "wings" and part.get("out_up_used") is None and not part.get("across"):
             bits.append(f"out_up {part.get('out_up')}, out_back {part.get('out_back')}")
+        if part.get("flat"):
+            bits.append(f"laid out as the {part['across']} sprite draws it from above, tips "
+                        + (f"raised {part['rise']:.0f}" if part["rise"] >= 0 else f"lowered {-part['rise']:.0f}")
+                        + " voxels as in the side sprite")
+        elif part.get("across"):
+            bits.append(f"across the body as the {part['across']} sprite draws it")
+        elif part["type"] in ("solid", "pair", "wings") and built.views and not part.get("auto"):
+            bits.append("NOT placed in the front or back sprite: built from its profile alone")
         if part.get("opening") is not None:
-            bits.append(f"opening found by Seurat against the front and back sprites ({int(part['opening'])} degrees from straight up)")
+            way = ("down" if part.get("hangs") else "up") + (", towards the front" if part.get("forward") else "")
+            bits.append(f"opening found by Seurat against the front and back sprites ({int(part['opening'])} degrees from straight {way})")
         lines.append(f"- {part['name']} ({part['type']}): " + ", ".join(bits))
     lines += [f"! {n}" for n in built.notes]
     return "\n".join(lines)

@@ -301,17 +301,26 @@ def test_wings_open_the_way_the_other_sprites_say():
 
 
 def test_nothing_floats_beside_the_body():
-    """Legs set wider apart than the body is thick there would hang in the air: they are joined to the middle plane
-    where they meet the body in the profile."""
+    """Legs set wider apart than the body is thick there would hang in the air: they are brought in until they touch
+    it, without a bar and without a word; a part made of lines only is never black."""
     p = sp.read_profile(bird_side())
     wide = sp.normalise_plan({**PLAN, "parts": [dict(q, offset=9, width=2) if q["name"] == "legs" else q for q in PLAN["parts"]]})
     built = sp.build(p, wide)
     legs = next(q for q in built.parts if q["name"] == "legs")
-    assert legs["joined"] >= 1
+    assert legs["settled"] >= 1 and "brought in to touch the body" in sp.report(built)
     solids = [k + 1 for k, q in enumerate(built.parts) if q["type"] == "solid"]
     assert not sp._floating(np.where(built.grid > 0, built.pid, 0), solids).any()
-    assert not any("float" in n for n in built.notes) and any("joined it with a bar" in n for n in built.notes)
-    assert "joined" not in next(q for q in sp.build(p, sp.normalise_plan(PLAN)).parts if q["name"] == "legs")
+    assert not any("float" in n or "bar" in n for n in built.notes)
+    k = built.parts.index(legs) + 1
+    xs = np.nonzero((built.pid == k).any(axis=(1, 2)))[0]
+    assert xs.max() - xs.min() + 1 < 2 * 9                                    # closer together than asked
+    assert (built.pid == k).sum() == (built.pid[::-1] == k).sum() and ((built.pid == k) == (built.pid[::-1] == k)).all()
+    assert "settled" not in next(q for q in sp.build(p, sp.normalise_plan(PLAN)).parts if q["name"] == "legs")
+    lines = sp.normalise_plan({**PLAN, "parts": [q for q in PLAN["parts"] if q["name"] != "legs"]
+                               + [{"name": "legs", "type": "pair", "where": [[17, 25, 17, 30]], "offset": 3, "width": 2}]})
+    built = sp.build(p, lines)                                                 # only the leg's outline
+    k = [q["name"] for q in built.parts].index("legs") + 1
+    assert "#000000" not in {built.palette[i - 1] for i in np.unique(built.grid[built.pid == k])}
 
 
 def test_overlapping_shapes_follow_the_patches_of_colour():
@@ -378,6 +387,224 @@ def test_a_face_comes_from_the_front_sprite_when_it_shows_the_same_pose():
     assert len(off) == 0
     with pytest.raises(sp.PlanError):
         sp.normalise_plan({"parts": [dict(plan["parts"][0], paint="everything")]})
+
+
+def test_a_head_is_painted_when_only_the_rest_of_the_figure_holds_another_pose():
+    """A front sprite with the arms out is another pose as a whole, but over the rows of the head it is the model: the
+    head takes its face from it, the body does not."""
+    side = Image.new("RGBA", (16, 30), (0, 0, 0, 0))
+    d = ImageDraw.Draw(side)
+    d.rectangle([5, 14, 10, 29], fill=GREY + (255,), outline=INK + (255,))
+    d.ellipse([0, 0, 15, 15], fill=RED + (255,), outline=INK + (255,))
+    front = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
+    d = ImageDraw.Draw(front)
+    d.rectangle([12, 14, 17, 29], fill=GREY + (255,), outline=INK + (255,))
+    d.rectangle([0, 17, 29, 21], fill=GOLD + (255,), outline=INK + (255,))                 # the arms, held out
+    d.ellipse([7, 0, 22, 15], fill=RED + (255,), outline=INK + (255,))
+    d.rectangle([12, 6, 13, 7], fill=WHITE + (255,))
+    d.rectangle([16, 6, 17, 7], fill=WHITE + (255,))
+    sprites = {"side": np.asarray(side).copy(), "front": np.asarray(front).copy()}
+    plan = sp.normalise_plan({"parts": [{"name": "head", "type": "solid", "where": [[0, 0, 15, 14]], "width": 16},
+                                        {"name": "body", "type": "solid", "where": [[5, 15, 10, 29]], "width": 6}]})
+    built = sp.build(sp.read_profile(sprites["side"]), plan)
+    fam = sp.families_of(*sprites.values())
+    whole = sp.compare(sp.project(built.grid, sp.palette_rgb(built.palette), "front", 0.0), sprites["front"], fam)
+    assert whole["iou"] < sp.FACE_IOU
+    sp.paint_caps(built, sprites, {"front": 0.0}, fam)
+    head, body = built.parts
+    assert head.get("faces") == "front" and not body.get("faces")
+    white, gold = "#%02x%02x%02x" % WHITE, "#%02x%02x%02x" % GOLD
+    assert (built.grid == built.palette.index(white) + 1).sum() >= 6 and gold not in built.palette
+
+
+def test_a_sheet_opens_the_way_it_is_drawn_and_starts_on_the_body():
+    """A flipper hangs below its root: the opening Seurat finds is measured from straight down for it, and the sheet
+    starts where it meets the body, not out where the body is widest."""
+    img = Image.new("RGBA", (40, 34), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.ellipse([4, 2, 35, 23], fill=RED + (255,), outline=INK + (255,))
+    d.polygon([(14, 22), (22, 22), (12, 33), (6, 33)], fill=GOLD + (255,), outline=INK + (255,))
+    side = np.asarray(img).copy()
+    back = Image.new("RGBA", (44, 34), (0, 0, 0, 0))
+    d = ImageDraw.Draw(back)
+    d.ellipse([12, 2, 31, 23], fill=RED + (255,), outline=INK + (255,))
+    d.polygon([(14, 20), (2, 31), (6, 33), (18, 23)], fill=GOLD + (255,), outline=INK + (255,))
+    d.polygon([(29, 20), (41, 31), (37, 33), (25, 23)], fill=GOLD + (255,), outline=INK + (255,))
+    sprites = {"side": side, "back": np.asarray(back).copy()}
+    p = sp.read_profile(side)
+    plan = sp.normalise_plan({"facing": "right", "parts": [
+        {"name": "body", "type": "solid", "where": [[4, 2, 35, 23]], "colors": ["#c83c28"], "width": 20},
+        {"name": "flippers", "type": "wings", "where": [[5, 22, 23, 33]], "colors": ["#eba014"], "root": [18, 21], "span": 40}]})
+    built = sp.build(p, sp.tune_wings(p, plan, sprites))
+    flippers = built.parts[1]
+    assert flippers["hangs"] and "degrees from straight down" in sp.report(built)
+    assert not built.notes, built.notes                                       # no bar, nothing floating
+    mine = np.argwhere(built.pid == 2)
+    low = mine[mine[:, 1] == mine[:, 1].min()]                                # its lowest voxels are its widest apart
+    cx = built.grid.shape[0] / 2
+    assert np.abs(low[:, 0] - cx).max() > np.abs(mine[mine[:, 1] == mine[:, 1].max()][:, 0] - cx).max() + 3
+    assert flippers["span_built"] >= 36
+
+
+def test_a_sprite_facing_left_is_shown_and_reported_in_its_own_columns():
+    """The profile is kept facing right inside; what the plan's author reads back (the parts picture, the roots, the
+    notes) uses the columns of the sprite as it was given."""
+    side = bird_side()[:, ::-1].copy()
+    w = side.shape[1]
+
+    def mirrored(shape):
+        if isinstance(shape, dict):
+            return {"poly": [[w - 1 - c, r] for c, r in shape["poly"]]}
+        return [w - 1 - shape[2], shape[1], w - 1 - shape[0], shape[3]]
+
+    parts = [dict(q, where=[mirrored(sh) for sh in q["where"]], **({"root": [w - 1 - q["root"][0], q["root"][1]]} if q.get("root") else {}))
+             for q in PLAN["parts"] if q["type"] != "skip"]
+    plan = sp.normalise_plan({"facing": "left", "eye": [w - 1 - 30, 9], "parts": parts})
+    p = sp.read_profile(side, "left")
+    built = sp.build(p, plan)
+    wings = next(q for q in built.parts if q["name"] == "wings")
+    assert wings["root_used"] == [w - 1 - 15, 14]
+    far = next(n for n in built.notes if "FAR" in n)
+    assert f"columns {w - 1 - 21}-" in far                                    # the far wing, where the sprite has it
+    pic = np.asarray(sp.parts_picture(p, built.label, built.parts, zoom=4).convert("RGBA"))
+    ruler = 22
+    beak = pic[ruler + 10 * 4 + 2, ruler + (w - 1 - 37) * 4 + 2, :3]              # the beak is on the left, as in the sprite
+    assert tuple(int(v) for v in beak) == GOLD
+
+
+def doll() -> dict[str, np.ndarray]:
+    """A doll in three drawings: a round head on a thin body with a leg, in profile; from the front a head that is a
+    wide bell (narrow on top), two eyes, the body, the arms held out and two legs apart."""
+    side = Image.new("RGBA", (16, 34), (0, 0, 0, 0))
+    d = ImageDraw.Draw(side)
+    d.rectangle([5, 14, 10, 27], fill=GREY + (255,), outline=INK + (255,))
+    d.rectangle([6, 27, 9, 33], fill=GOLD + (255,), outline=INK + (255,))
+    d.ellipse([0, 0, 15, 15], fill=RED + (255,), outline=INK + (255,))
+    front = Image.new("RGBA", (30, 34), (0, 0, 0, 0))
+    d = ImageDraw.Draw(front)
+    d.rectangle([12, 14, 17, 27], fill=GREY + (255,), outline=INK + (255,))
+    d.rectangle([0, 17, 29, 21], fill=PALE_RED + (255,), outline=INK + (255,))                 # the arms, held out
+    d.rectangle([8, 27, 11, 33], fill=GOLD + (255,), outline=INK + (255,))
+    d.rectangle([18, 27, 21, 33], fill=GOLD + (255,), outline=INK + (255,))
+    d.polygon([(11, 0), (18, 0), (24, 15), (5, 15)], fill=RED + (255,), outline=INK + (255,))  # a bell
+    d.rectangle([11, 9, 12, 10], fill=WHITE + (255,))
+    d.rectangle([17, 9, 18, 10], fill=WHITE + (255,))
+    d.line([(10, 13), (19, 13)], fill=INK + (255,))                                            # a mouth: a line of the drawing
+    return {"side": np.asarray(side).copy(), "front": np.asarray(front).copy()}
+
+
+DOLL = {"facing": "right", "parts": [
+    {"name": "head", "type": "solid", "where": [[0, 0, 15, 14]], "front": [[5, 0, 24, 15]]},
+    {"name": "body", "type": "solid", "where": [[5, 15, 10, 27]], "front": [[12, 15, 17, 27]]},
+    {"name": "legs", "type": "pair", "where": [[6, 28, 9, 33]], "front": [[8, 27, 21, 33]]}]}
+
+
+def test_each_part_is_built_and_painted_from_how_the_other_sprites_draw_it():
+    """A part placed in the front sprite is as wide, at every height, as that sprite draws it, whatever the rest of the
+    figure does there; legs stand as far apart as it sets them; and what the part shows to the front is that sprite's
+    own drawing of it, without its lines."""
+    sprites = doll()
+    p = sp.read_profile(sprites["side"])
+    built = sp.build(p, sp.normalise_plan(DOLL), sprites=sprites)
+    head, body, legs = built.parts
+    assert head["across"] == body["across"] == legs["across"] == "front" and "front" in built.views
+    assert "across the body as the front sprite draws it" in sp.report(built)
+    cx, y0, h = built.place["cx"], built.place["y0"], built.place["h"]
+
+    def width_at(k: int, row: int) -> int:
+        xs = np.nonzero((built.pid[:, y0 + (h - 1 - row), :] == k).any(axis=1))[0]
+        return int(xs.max() - xs.min() + 1) if len(xs) else 0
+
+    assert width_at(1, 2) <= 12 and width_at(1, 12) >= 17                         # a bell: narrow on top, wide below
+    assert abs(width_at(1, 12) - 19) <= 2
+    assert body["width_built"] <= 8                                                # the arms (30 across) did not widen the body
+    k = 3
+    xs = np.nonzero((built.pid == k).any(axis=(1, 2)))[0]
+    assert xs.min() == cx - 7 and xs.max() == cx + 6                               # the legs where the front sprite has them
+    assert not (built.pid[cx - 3: cx + 3] == k).any()                              # and apart: nothing between them
+    sp.paint_caps(built, sprites, {"front": 0.0})
+    white = built.palette.index("#%02x%02x%02x" % WHITE) + 1
+    eyes = np.argwhere(built.grid == white)
+    assert len(eyes) >= 4 and set(built.pid[tuple(eyes.T)]) == {1} and eyes[:, 2].min() > built.grid.shape[2] / 2
+    front = sp.project(built.grid, sp.palette_rgb(built.palette), "front", 0.0)
+    assert (0, 0, 0) not in {tuple(int(v) for v in px[:3]) for px in front[front[..., 3] > 0]}     # no line of the drawing
+    assert "front" in head["faces"]
+    # a width given by hand keeps the round form; a shape that catches nothing is said
+    by_hand = sp.build(p, sp.normalise_plan({**DOLL, "parts": [dict(DOLL["parts"][0], width=10)] + DOLL["parts"][1:]}), sprites=sprites)
+    assert by_hand.parts[0]["width_built"] == 10 and "across" not in by_hand.parts[0]
+    lost = sp.build(p, sp.normalise_plan({**DOLL, "parts": [dict(DOLL["parts"][0], front=[[0, 0, 1, 1]])] + DOLL["parts"][1:]}), sprites=sprites)
+    assert any("in the front sprite caught nothing" in n for n in lost.notes)
+    # the pictures of the reading show every sprite
+    assert sp.reading_picture(p, built).height > sp.parts_picture(p, built.label, built.parts).height
+    assert sp.sides_picture(built, sprites, {"front": 0.0}) is not None
+
+
+def test_wings_are_laid_out_from_their_drawing_from_above():
+    """The back sprite is drawn from above: what it shows of the wings is their outline. Wings placed there are that
+    outline laid out to each side from the root, their tips raised as high as the side sprite raises them; Seurat does
+    not look for an opening for them and their pixels in the profile build nothing on the middle plane."""
+    side, back = bird_side(), bird_back()
+    sprites = {"side": side, "back": back}
+    p = sp.read_profile(side)
+    parts = [dict(q) for q in PLAN["parts"]]
+    for q in parts:
+        if q["type"] == "wings":
+            for key in ("out_up", "out_back", "span"):
+                q.pop(key, None)
+            q["back"] = [[1, 0, 18, 18], [25, 0, 42, 18]]
+    plan = sp.normalise_plan({"facing": "right", "eye": [30, 9], "parts": parts})
+    assert sp.tune_wings(p, plan, sprites) is plan
+    built = sp.build(p, plan, sprites=sprites)
+    wings = next(q for q in built.parts if q["name"] == "wings")
+    k = built.parts.index(wings) + 1
+    assert wings["across"] == "back" and wings.get("opening") is None and wings["flat"] and wings["rise"] > 8
+    assert "laid out as the back sprite draws it from above" in sp.report(built)
+    view = built.views["back"]
+    assert abs(wings["span_built"] - 2 * float(view.outer[k - 1].max())) <= 3
+    cx = built.place["cx"]
+    mine = np.argwhere(built.pid == k)
+    top, bottom = mine[mine[:, 1] >= mine[:, 1].max() - 1], mine[mine[:, 1] <= mine[:, 1].min() + 1]
+    assert np.abs(top[:, 0] - cx + 0.5).min() > np.abs(bottom[:, 0] - cx + 0.5).max()          # tips high and far out
+    assert not (built.pid[cx - 1: cx + 1] == k).any()                                          # nothing of them on the middle plane
+    assert (built.pid == k).sum() == (built.pid[::-1] == k).sum()                              # one to each side
+
+
+def test_a_crest_drawn_wide_is_two_crossed_blades():
+    """A fin stays thin along the body; when the front sprite draws it wide it gets a second thin blade across, as wide
+    as that sprite says, instead of becoming a ball."""
+    side = Image.new("RGBA", (16, 24), (0, 0, 0, 0))
+    d = ImageDraw.Draw(side)
+    d.rectangle([4, 0, 11, 8], fill=GOLD + (255,), outline=INK + (255,))
+    d.ellipse([0, 8, 15, 23], fill=RED + (255,), outline=INK + (255,))
+    front = Image.new("RGBA", (20, 24), (0, 0, 0, 0))
+    d = ImageDraw.Draw(front)
+    d.rectangle([2, 0, 17, 8], fill=GOLD + (255,), outline=INK + (255,))
+    d.ellipse([2, 8, 17, 23], fill=RED + (255,), outline=INK + (255,))
+    sprites = {"side": np.asarray(side).copy(), "front": np.asarray(front).copy()}
+    plan = sp.normalise_plan({"parts": [{"name": "head", "type": "solid", "where": [[0, 9, 15, 23]], "front": [[2, 9, 17, 23]]},
+                                        {"name": "crest", "type": "fin", "where": [[4, 0, 11, 7]], "front": [[2, 0, 17, 7]]}]})
+    built = sp.build(sp.read_profile(sprites["side"]), plan, sprites=sprites)
+    mine = built.pid == 2
+    across = mine.sum(axis=0)                                # voxels across at each (height, place along the body)
+    assert built.parts[1]["across"] == "front" and across.max() >= 14
+    assert np.median(across[across > 0]) <= 2                # thin almost everywhere: a slab, not a block
+    wide_at = np.nonzero((across >= 10).any(axis=0))[0]
+    assert 1 <= len(wide_at) <= 3                            # the blade across is thin along the body too
+
+
+def test_a_model_has_no_drawn_lines_but_keeps_small_dark_features():
+    side = Image.new("RGBA", (20, 14), (0, 0, 0, 0))
+    d = ImageDraw.Draw(side)
+    d.ellipse([0, 0, 19, 13], fill=RED + (255,), outline=INK + (255,))
+    d.line([(4, 7), (15, 7)], fill=INK + (255,))                                   # a long line of the drawing
+    d.point((14, 4), fill=INK + (255,))                                            # a pupil
+    p = sp.read_profile(np.asarray(side).copy())
+    plan = {"parts": [{"name": "head", "type": "solid", "where": [[0, 0, 19, 13]]}]}
+    flank = sp.project(sp.build(p, sp.normalise_plan(plan)).grid, sp.palette_rgb(sp.build(p, sp.normalise_plan(plan)).palette), "side", 0.0)
+    colours = {tuple(int(v) for v in px[:3]) for px in flank[flank[..., 3] > 0]}
+    assert colours == {RED, INK} and (np.all(flank[..., :3] == INK, axis=2) & (flank[..., 3] > 0)).sum() == 1
+    soft = sp.build(p, sp.normalise_plan({**plan, "ink": "soften"}))
+    assert len(soft.palette) > len(sp.build(p, sp.normalise_plan(plan)).palette)   # the old look: lines as darker tones
 
 
 def test_generation_by_parts_and_its_tools(tmp_path):

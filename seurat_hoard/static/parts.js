@@ -91,7 +91,7 @@ function render(report) {
     title: 'DeepSeek sigue desde este plan con lo que le pidas (varios minutos); la versión actual se guarda', onclick: () => request(ask) });
   box.replaceChildren(
     el('h3', { text: 'Partes del personaje' }),
-    el('p', { class: 'hint', text: 'El perfil es el sprite lateral; aquí se ajusta cómo es cada parte a lo ancho. Vacío = automático.' }),
+    el('p', { class: 'hint', text: 'Cada parte se construye como la dibujan los sprites: de perfil el lateral, a lo ancho el de frente o el de espalda (donde el plan la sitúa en ellos, «front» y «back» en «Editar el plan»). Un número aquí manda sobre el sprite; vacío = lo que diga el sprite.' }),
     ...rows,
     el('div', { class: 'parts-actions' }, rebuild, toggle),
     area,

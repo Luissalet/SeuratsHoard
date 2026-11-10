@@ -615,6 +615,29 @@ def _check_eye(p: Profile, plan: dict[str, Any], parts: list[dict[str, Any]], la
                      f"make sure that is the eye and that shape the head")
 
 
+def _check_skips(p: Profile, parts: list[dict[str, Any]], masks: list[np.ndarray], notes: list[str]) -> None:
+    """A far copy has the colours of the near one. A skip part of colours that no wings or pair part has is more likely
+    a marking of the body that would be lost: say so."""
+    skips = [k for k, part in enumerate(parts) if part["type"] == "skip" and not part.get("auto") and part.get("pixels", 0) >= 6]
+    if not skips:
+        return
+    cls = families_of(p.rgba).classify(p.rgba)
+    twice: set = set()
+    for k, part in enumerate(parts):
+        if part["type"] in ("wings", "pair"):
+            c = cls[masks[k] & ~p.ink]
+            if len(c):
+                count = np.bincount(c)
+                twice |= {int(i) for i in np.nonzero(count >= 0.15 * len(c))[0]}
+    for k in skips:
+        c = cls[masks[k] & ~p.ink]
+        if not len(c):
+            continue
+        if int(np.bincount(c).argmax()) not in twice:
+            notes.append(f"'{parts[k]['name']}' (skip) has colours that no wings or pair part has: a far wing or limb looks like the near "
+                         f"one. If it is a marking of the body (a belly, a stripe) it is being lost: remove that skip part")
+
+
 def far_copies(p: Profile, label: np.ndarray, parts: list[dict[str, Any]]) -> list[tuple[int, np.ndarray]]:
     """Side sprites let the far wing, arm or leg peek out behind the near one, for looks. Inside a part that exists
     twice (wings, pair) it shows as a second area of the same colours cut off from the main one by a line. Returns
@@ -756,6 +779,7 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
         part["pixels"] = int(masks[k].sum())
         if not part["pixels"]:
             notes.append(f"part '{part['name']}' got no pixels: check its shapes, cells and colours")
+    _check_skips(p, parts, masks, notes)
     lateral_px = np.zeros((h, w), bool)
     for k, part in enumerate(parts):
         if part["type"] in LATERAL:

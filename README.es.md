@@ -40,6 +40,27 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
     trabajo las enseña por ronda. El agente sabe cuándo una ejecución es peor que su mejor versión y se guarda la mejor,
     no la última. `continue_from` continúa una generación desde el programa y el brief de un modelo (restaura antes el
     paso que quieras).
+  - *Hojas de sprites y sprites animados*: se lee cada fotograma de un GIF (o WebP/PNG animado) y cada celda de una hoja
+    (la rejilla sale de los huecos entre sprites, de su repetición cuando se tocan, o de columnas x filas que le des).
+    Seurat adivina qué fotogramas enseñan cada lado (en las hojas de caminar, filas o columnas son direcciones y el resto
+    pasos; una animación que gira se corta en sus tramos; los grupos asimétricos son laterales y el que tiene cara es el
+    frente) y lo puedes cambiar en *Fotogramas*. Con el papel *Hoja o animación* cada lado es otra cámara del mismo
+    modelo y sus otros fotogramas cuentan como poses: el fotograma de pie es la vista principal y los pasos se reparten la
+    mitad de la nota de esa vista.
+  - *Calibrar la cámara*: tras las primeras ejecuciones (y cada tres) el agente busca desde qué ángulo dibujó el juego
+    cada sprite comparando la silueta del modelo a varias alturas y giros (entre 20 y 70 grados y 10 a cada lado mientras
+    el modelo se construye, y solo si el sprite encaja claramente mejor), en lugar de los 45/0 grados fijos; un lado con
+    cámara desconocida (papel *Vista libre*) busca su giro en toda la vuelta. *Calibrar con el modelo abierto*
+    (`model_sprite_calibrate`) lo hace con cualquier modelo y una búsqueda amplia, enseña cada sprite junto al modelo
+    desde su cámara y puede guardar en Ajustes las alturas encontradas.
+  - *Escenas por partes* (`method: scene`, cuadrículas de hasta 256 de lado): el modelo planifica la escena en objetos
+    (un suelo y cada objeto con su tamaño y sus colocaciones; los repetidos se construyen una vez y se colocan varias,
+    girados), cada objeto lo construye su propio bucle de agente en su cuadrícula (hasta 128), Seurat los coloca y los
+    asienta sobre lo que tienen debajo, junta sus paletas y el modelo revisa una vez la composición con una vista con luz
+    y otra desde arriba. El plan se enseña antes como cajas; los programas de cada objeto se guardan con la escena.
+  - *Rondas en 3D*: se guardan los voxels de cada ronda de una generación, así que cualquier ronda intermedia se abre en
+    el editor (*Ver en 3D*, una vista previa que no se guarda) o se convierte en un modelo propio (*Guardar como modelo*,
+    `generate_round`).
   - *Con el modelo de lenguaje, como programa por rondas fijas*: DeepSeek V4.1 Flash escribe primero un brief de diseño con
     lo que sabe del tema y tu descripción (partes, proporciones, posición en 3D, paleta; las imágenes son solo pistas,
     nunca se calcan) y después un programa en Python que
@@ -59,14 +80,22 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
   - *Solo con una descripción* (sin imágenes): el modelo construye un objeto, un personaje o una escena entera a partir
     del texto, en una cuadrícula del tamaño elegido y con las mismas rondas de revisión.
   - El pixel art ampliado por un factor entero se lee a su tamaño real; un fondo de un solo color pasa a transparente.
+- **Render con luz**: las vistas 3D de las hojas que revisa el modelo, `look` y `model_look` (`lit`, `lit_front_left`,
+  `lit_back_left`, `lit_back_right`, `lit_front`, `lit_top`, cualquier giro y altura, `sheet_lit`) tienen luz de verdad:
+  una luz principal con sombras arrojadas trazadas por la cuadrícula, oclusión ambiental en los pliegues y un suelo que
+  recoge la sombra, calculado con numpy sin GPU (ajuste `review_render`: con luz o plano).
+- **Animaciones de giro**: el modelo girando con esa luz, en GIF o WebM (VP9 con ffmpeg), desde Exportar o con
+  `model_spin`.
 - **Exportar**: `.vox` (MagicaVoxel 150, ida y vuelta), `.glb` (colores por vértice, mallado agrupado), `.stl` binario
   en milímetros (malla cerrada, z arriba, ajuste `voxel_mm`), PNG de cualquier vista y una tira de sprites isométricos
   desde cuatro lados. Se pueden importar `.vox` y schematics `.schem` de Minecraft (WorldEdit).
-- **Asistentes** (MCP, `mcp_server.py`, 32 herramientas): listar, crear y editar modelos con operaciones (`model_ops`),
-  verlos (`model_look` devuelve una imagen, también desde las cámaras de overworld del juego), comparar un modelo con
-  sprites del juego desde su cámara (`model_sprite_match`), ejecutar programas voxel con las herramientas de sprites
-  (`model_program` con `sprites`), añadir referencias, construir o generar desde imágenes, seguir y cancelar
-  generaciones, exportar, versiones y ajustes.
+- **Asistentes** (MCP, `mcp_server.py`, 36 herramientas): listar, crear y editar modelos con operaciones (`model_ops`),
+  verlos (`model_look` devuelve una imagen, también desde las cámaras de overworld del juego y con luz desde cualquier
+  lado), comparar un modelo con sprites del juego desde su cámara (`model_sprite_match`, también con hojas y poses),
+  calibrar esas cámaras (`model_sprite_calibrate`), leer los fotogramas de hojas y animaciones (`reference_frames`),
+  ejecutar programas voxel con las herramientas de sprites (`model_program` con `sprites`), añadir referencias,
+  construir o generar desde imágenes o como escena por partes, seguir y cancelar generaciones, abrir o guardar cualquier
+  ronda (`generate_round`), exportar, giros (`model_spin`), versiones y ajustes.
 
 ## El lenguaje de operaciones
 
@@ -87,6 +116,9 @@ python -m venv .venv
 
 Se abre en http://127.0.0.1:5250. El Hoard Hub lo arranca como al resto de la familia. Datos (modelos, referencias,
 renders, ajustes, `mcp-token`) en `data/`. Ajustes: tamaño y colores de lectura, rondas de revisión, esfuerzo y tokens
-de razonamiento, pintar las imágenes sobre la forma, una URL fija compatible con OpenAI en lugar del modelo de la familia, y escala de STL y GLB.
+de razonamiento, pintar las imágenes sobre la forma, calibrar la cámara, vistas de revisión con luz o planas, escenas
+(acciones por objeto, objetos como máximo, tamaño por defecto), una URL fija compatible con OpenAI en lugar del modelo de
+la familia, y escala de STL y GLB. Los giros en WebM necesitan ffmpeg en el PATH (o el paquete `imageio-ffmpeg`); el GIF
+no necesita nada.
 
 Tests: `.venv\Scripts\python -m pytest`.

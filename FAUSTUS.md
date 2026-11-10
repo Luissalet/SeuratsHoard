@@ -1,7 +1,8 @@
 # Seurat's Hoard — what it can and cannot do
 
-App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_server.py` (32 tools; `model_look`,
-`model_sprite_match` and `reference_look` return MCP images). Connector preset: its own `faustus-plugin.json`.
+App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_server.py` (36 tools; `model_look`,
+`model_sprite_match`, `model_sprite_calibrate`, `reference_frames`, `generate_round` and `reference_look` return MCP
+images). Connector preset: its own `faustus-plugin.json`.
 
 ## Can
 
@@ -66,6 +67,45 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
   sprite score: a worse run is flagged in the next message and the best version (grid, palette, program) is what the
   generation keeps. `continue_from` (model id, agent only) carries a generation on from that model's program and brief
   without a new brief; new versions go to that model.
+- Sprite sheets and animations (`sheets.py`, tool `reference_frames`, REST `/api/references/<id>/frames` and
+  `frames.png`, UI *Fotogramas* on every reference card): every frame of a GIF/animated WebP/APNG (up to 96; a flat
+  backdrop is removed also when the frame mixes it with transparency) or every cell of a sheet (grid from the gaps, from
+  the repeat of touching sprites over the occupied extent, or `cols` x `rows`; pixel-art scale undone once for the whole
+  sheet; specks under 15% of a typical frame dropped). `guess_views`: sheets are grouped by rows or columns (whichever
+  groups more alike frames), animations cut into equal runs when they turn; the asymmetric groups (outline and colours)
+  are sides, the one with more inner detail at the top is the front, the plainest the back; the medoid (standing frame)
+  comes first. Reference entries take role `sheet` (all sides, `views` to override, `cols`/`rows`), or front/back/side/
+  `view` with `frames` (first = main, rest = poses); an animated picture with a plain role gives its standing frame and
+  the others as poses (`Services.expand_references`). Poses are matched against the same render: a view's score is half
+  its main frame, half the poses' mean; a role's weight is shared by its sprites (two side sprites weigh one side).
+- Camera calibration (`spritecam.calibrate`, tool `model_sprite_calibrate`, REST `POST /api/models/<id>/calibrate`, UI
+  *Calibrar con el modelo abierto*): a coarse sweep of yaw and pitch around each role's usual camera (front/back 0-80
+  degrees above and 20 around, side 0-60 on both sides, `view` all around), then finer steps, comparing one-voxel-per-pixel
+  silhouettes (pixel fit with the best shift, or area fit for models of another scale). `apply` saves the front/back
+  and side heights as settings. In agent generations (setting `sprite_calibrate`, param `calibrate`) it runs after the
+  first run, every third run and while a `view` has no camera, within 20-70 degrees and 10 around, and a sprite takes
+  the new camera only when it matches 0.02 better; the program data, scores and the best version are recomputed with it.
+- Lit renders (`lit.py`): key light with shadow rays marched through the grid at each face corner, sky occlusion from
+  nine short rays per corner, a ground at y = 0 fading out around the model; lighting baked once per model, each camera
+  only projects k x k samples per face in painter's order (supersampled 2x within 4 M samples). About 1 s for a 128 x 64 x
+  128 scene of 130 k faces. Views `lit`, `lit_front_left`, `lit_back_left`, `lit_back_right`, `lit_front`, `lit_top`,
+  `sheet_lit`, any `yaw`/`pitch` (`model_look`, `/render.png`, PNG export). The review sheets of every method and the
+  agent's `look` of iso views use them (setting `review_render` lit/flat).
+- Spins (`lit.spin`, tool `model_spin`, REST `/api/models/<id>/spin/{gif|webm}`, Export tab): the camera circles the model
+  with the light fixed in the world, fixed canvas and centre; GIF via Pillow, WebM (VP9) via ffmpeg (`imageio-ffmpeg` or
+  PATH). 24 frames of the 128-side scene take about 13 s.
+- Rounds in 3-D (`rounds.py`): every recorded round with voxels is kept as `renders/<job>-r<n>.npz` (grid + palette);
+  tool `generate_round` (lit picture; `save` makes a model, source kind `round`), REST `/api/jobs/<job>/rounds/<n>/model`
+  (voxels for the editor) and `/save`; UI *Ver en 3D* opens it in the editor as a preview that is not autosaved (bar with
+  *Guardar como modelo* / *Volver*) and *Guardar como modelo*.
+- Scenes by parts (`scene.py`, `generate_start` method `scene`, UI method *Escena por partes*): plan JSON (objects with
+  size, description, `ground`, placements with position and quarter-turn rotation; at most `scene_objects`), shown as
+  hollow boxes (round 0); each object built by its own agent loop (`scene_steps` actions, the time budget shared) in its
+  own grid (up to 128; the ground up to the scene's X x Z), recorded rounds tagged with the object; `compose` turns,
+  places (ground first, the rest set down on what is under their lowest layer), merges palettes (equal colours shared,
+  nearest past 255) and reports clipped placements; one layout check (lit view + top view, only placement changes) when
+  rounds > 0. Scene grid `size` or setting `scene_size`, up to 256 a side. The model's source keeps the plan and every
+  object's program.
 - Voxel programs in fixed rounds (method `code`): first the model writes a design brief (what the subject is from its
   own knowledge and the description, parts with sizes and x/y/z positions, palette, what must read from each side;
   pictures are only hints, never traced), shown in the job and kept in `source.brief`; then it writes Python (`PALETTE` + `build(g)`, helpers ellipsoid,
@@ -96,18 +136,31 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
 ## Cannot
 
 - Generate textures or smooth meshes: everything is voxels with flat palette colours.
-- Read animated sprites beyond their first frame.
+- Animate a model: the frames of a walk are poses that judge one static model (a neutral pose between them); there is no
+  rig, no posed copies and no animated voxel export.
+- Always guess the sides of a sheet right: front and back are told apart by detail at the top (a face), so a back with a
+  busy pattern can pass for the front; 8-direction sheets get front, back and two sides, the diagonals stay unused
+  unless set as `view` (the *Fotogramas* dialog changes any of it). Animations are cut only into equal runs.
+- Calibrate against a bad model: the camera bends to whatever silhouette there is; during generations it is held near
+  the usual camera for that reason.
+- Make WebM without ffmpeg (GIF always works). Light the scene from more than one fixed light (no coloured or moving
+  lights, no reflections).
+- Move the objects of a generated scene afterwards as objects: once composed it is one voxel model (the plan and the
+  programs stay in its source).
 - Guarantee that the model's back and sides match what the artist imagined: they are invented from the front (add side,
   top or back pictures to constrain them).
 - Be quick with the default settings: with effort `max` each round takes several minutes (a four-round generation can
   take half an hour or more). Effort `off` answers in seconds but sculpts much worse.
 - Copy game sprites as exact projections: overworld sprites are drawn from above at an angle and by hand, so even with
-  the sprite target only the side profile is exact; the front/back camera (45 degrees by default) is approximate, and
-  the parts no sprite shows (underside, between the wings) are the model's own reading.
+  the sprite target only the side profile is exact; the front/back camera (45 degrees by default, or the calibrated one:
+  the angle that fits the model best, not necessarily the artist's) is approximate, and the parts no sprite shows
+  (underside, between the wings) are the model's own reading.
 
 ## Where things are
 
 - Data: `data/` (models/<id>/model.json and versions/, references/, renders/ with each round's sheet and raw answer,
   exports/, settings.json, mcp-token). Trash: `data/trash/`.
 - Voxel engine `voxels.py`; builders `builders.py`; pictures `images.py`; renders `render.py`; exports `exporters.py`;
-  generations `generate.py`; sprite target and game cameras `spritecam.py`; model client `llm.py`; UI in `static/` (three.js r170 vendored).
+  generations `generate.py`; sprite target, game cameras and calibration `spritecam.py`; sheets and animations
+  `sheets.py`; lit renders and spins `lit.py`; scenes by parts `scene.py`; round snapshots `rounds.py` (files in
+  `data/renders/`); model client `llm.py`; UI in `static/` (three.js r170 vendored).

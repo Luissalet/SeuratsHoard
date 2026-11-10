@@ -38,6 +38,25 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
     extra), match scores and how its size compares; the job panel shows them per round. The agent is told when a run
     is worse than its best so far and the best version is the one kept. `continue_from` carries a generation on from a
     model's program and brief (restore the step you want first).
+  - *Sprite sheets and animated sprites*: every frame of a GIF (or animated WebP/PNG) and every cell of a sheet is read
+    (the grid is found from the gaps between the sprites, from their repeat when they touch, or given as columns x
+    rows). Seurat guesses which frames show which side (walk sheets: rows or columns are directions, the rest steps;
+    an animation that turns is cut into its runs; asymmetric groups are sides, the one with a face is the front) and you
+    can change it in *Fotogramas*. With the role *sheet* every side becomes another camera of the same model and its other
+    frames count as poses: the standing frame is the main view, the steps share half of that view's score.
+  - *Camera calibration*: after the first runs (and every third) the agent finds from which angle the game drew each
+    sprite, comparing the model's silhouette from many heights and turns (within 20-70 degrees and 10 around while the
+    model is being built, and only when a sprite matches clearly better), instead of the fixed 45/0 degrees; a side whose
+    camera is unknown (role *view*) finds its turn all around. *Calibrar con el modelo abierto* (`model_sprite_calibrate`)
+    does it for any model with a wide search, shows each sprite against the model from its camera and can save the
+    heights found as settings.
+  - *Scenes by parts* (`method: scene`, grids up to 256 a side): the model plans the scene as objects (a ground, then
+    each object with its size and placements; repeated objects are built once and placed several times, turned), each
+    object is built by its own agent loop in its own grid (up to 128), Seurat places them and sets them down on what is
+    under them, merges their palettes, and the model checks the layout once from a lit view and the top. The plan is
+    shown as boxes first; every object's programs are kept with the scene.
+  - *Rounds in 3-D*: the voxels of every round of a generation are kept, so any intermediate round opens in the editor
+    (*Ver en 3D*, a preview that is not saved) or becomes a model of its own (*Guardar como modelo*, `generate_round`).
   - *With the language model, as a program in fixed rounds*: DeepSeek V4.1 Flash first writes a design brief from what it
     knows about the subject and your description (parts, proportions, positions in 3D, palette; pictures are only
     hints, never traced), then a Python program that builds the
@@ -55,13 +74,22 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
   - *From a description alone* (no pictures): the model builds an object, a character or a whole scene from the prompt
     in a grid of the chosen size, with the same review rounds.
   - Pixel art enlarged by an integer factor is read at its real size; a flat background colour becomes transparent.
+- **Lit renders**: the 3-D views of the review sheets the model sees, `look` and `model_look` (`lit`, `lit_front_left`,
+  `lit_back_left`, `lit_back_right`, `lit_front`, `lit_top`, any yaw/pitch, `sheet_lit`) have real light: a key light
+  with cast shadows marched through the grid, ambient occlusion in the creases and a ground that catches the shadow,
+  computed in numpy without a GPU (setting `review_render`: lit or flat).
+- **Spin animations**: a turntable of the model with that light, as GIF or WebM (VP9 through ffmpeg), from the Export
+  tab or `model_spin`.
 - **Exports**: `.vox` (MagicaVoxel 150, round trip), `.glb` (vertex colours, greedy-meshed), binary `.stl` in millimetres
   (closed mesh, z up, setting `voxel_mm`), PNG of any view, and an isometric sprite strip from four sides. `.vox` files
   and Minecraft `.schem` schematics (WorldEdit) can be imported.
-- **Assistants** (MCP, `mcp_server.py`, 32 tools): list/create/edit models with operations (`model_ops`), look at them
-  (`model_look` returns a picture, also from the game overworld cameras), compare a model with game sprites from their
-  camera (`model_sprite_match`), run voxel programs with the sprite tools (`model_program` with `sprites`), add references, build or generate from pictures, follow and cancel generations,
-  export, versions, settings.
+- **Assistants** (MCP, `mcp_server.py`, 36 tools): list/create/edit models with operations (`model_ops`), look at them
+  (`model_look` returns a picture, also from the game overworld cameras and lit from any side), compare a model with game
+  sprites from their camera (`model_sprite_match`, also with sheets and poses), calibrate those cameras
+  (`model_sprite_calibrate`), read the frames of sheets and animations (`reference_frames`), run voxel programs with the
+  sprite tools (`model_program` with `sprites`), add references, build or generate from pictures or as scenes by parts,
+  follow and cancel generations, open or save any round (`generate_round`), export, spins (`model_spin`), versions,
+  settings.
 
 ## The operation language
 
@@ -81,7 +109,8 @@ python -m venv .venv
 
 Opens at http://127.0.0.1:5250. The Hoard Hub starts it like the rest of the family. Data (models, references, renders,
 settings, `mcp-token`) in `data/`. Settings: reading size and colours, review rounds, reasoning effort and thinking
-tokens, painting the pictures onto the shape, a fixed
-OpenAI-compatible model URL instead of the family's, STL and GLB scale.
+tokens, painting the pictures onto the shape, camera calibration, lit or flat review views, scenes (actions per
+object, most objects, default size), a fixed OpenAI-compatible model URL instead of the family's, STL and GLB scale.
+WebM spins need ffmpeg on the PATH (or the `imageio-ffmpeg` package); GIF needs nothing.
 
 Tests: `.venv\Scripts\python -m pytest`.

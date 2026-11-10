@@ -277,6 +277,29 @@ def test_the_eye_settles_which_shape_is_the_head():
     assert [q["name"] for q in sp.build(left, sp.normalise_plan(flipped)).parts if q.get("eye") == "[11, 9]"] == ["eye"]
 
 
+def test_wings_open_the_way_the_other_sprites_say():
+    """A wings part that does not say how it opens is tried from straight up to straight back and keeps the opening
+    whose back view overlaps the back sprite best; one that says it is left alone."""
+    p = sp.read_profile(bird_side())
+    sprites = {"side": bird_side(), "back": bird_back()}
+    free = sp.normalise_plan({"facing": "right", "eye": [30, 9],
+                              "parts": [{k: v for k, v in q.items() if k not in ("out_up", "out_back")} for q in PLAN["parts"]]})
+    tuned = sp.tune_wings(p, free, sprites)
+    wings = next(q for q in tuned["parts"] if q["type"] == "wings")
+    assert wings["opening"] in (0, 15, 30, 45, 60, 75, 90) and wings["out_up"] is not None
+    assert next(q for q in free["parts"] if q["type"] == "wings")["out_up"] is None          # the plan given is not touched
+    scores = {}
+    for deg, (up, back) in ((0, (1.0, 0.0)), (90, (0.0, 1.0)), (wings["opening"], (wings["out_up"], wings["out_back"]))):
+        plan = sp.normalise_plan({**free, "parts": [dict(q, out_up=up, out_back=back) if q["type"] == "wings" else q for q in free["parts"]]})
+        built = sp.build(p, plan)
+        scores[deg] = sp.evaluate(built, sprites, sp.tune_camera(built, sprites))["views"]["back"]["iou"]
+    assert scores[wings["opening"]] >= max(scores.values()) - 1e-6
+    assert "opening found by Seurat" in sp.report(sp.build(p, tuned))
+    fixed = sp.normalise_plan(PLAN)
+    assert sp.tune_wings(p, fixed, sprites) is fixed
+    assert sp.tune_wings(p, free, {"side": bird_side()}) is free                              # nothing to compare with
+
+
 def test_overlapping_shapes_follow_the_patches_of_colour():
     """Rectangles written by a model overlap. A patch stays with the part that has the rest of it, and a shape lying
     inside another one wins there whatever the order."""

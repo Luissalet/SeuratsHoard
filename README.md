@@ -17,7 +17,8 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
     model's exact profile (every pixel is a column of voxels) and a plan says what each part is across the body: `solid`
     (a rounded solid on the middle plane: body, head, thick tail), `fin` (a thin slab), `fan` (widens away from its root,
     rounded towards its edges; its end is painted from the back sprite), `pair` (legs, arms, ears: one on each side), `wings` (two flat sheets that
-    leave the body, with a span and a direction), `decal` (a marking only on the flanks: eyes) and `skip` (what the side
+    leave the body, with a span; how they open is found by Seurat, trying from straight up to straight back and keeping
+    what matches the front and back sprites best), `decal` (a marking only on the flanks: eyes) and `skip` (what the side
     sprite shows only for looks, like the far wing peeking out: not built, the mirrored near one already is it; inside wings or a pair
     Seurat finds it by itself, a second area of the same colours behind a line of its own, and `far: keep` keeps it). The plan says where the eye is
     (`eye`): the shape that carries it is the head, and Seurat refuses a plan that puts it on a wing or at the end

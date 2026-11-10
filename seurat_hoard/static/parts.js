@@ -14,7 +14,7 @@ const FIELDS = {
   fan: [['base', 'Ancho en la raíz', 'voxels', 2, 60, 1], ['width', 'Ancho al final', 'voxels', 2, 120, 1]],
   pair: [['offset', 'Separación', 'del centro del cuerpo al centro de cada uno', 0, 60, 0.5], ['width', 'Grosor', 'de cada uno, de lado a lado', 1, 60, 1],
     ['far', 'La de detrás', 'la extremidad lejana que el sprite lateral deja asomar detrás de la cercana: Seurat la busca y no la construye', FAR]],
-  wings: [['span', 'Envergadura', 'de punta a punta, en voxels', 4, 124, 1], ['out_up', 'Se abre al subir', '1 = cuanto más alto, más fuera (alas en V)', -2, 3, 0.1],
+  wings: [['span', 'Envergadura', 'de punta a punta, en voxels', 4, 124, 1], ['out_up', 'Se abre al subir', '1 = cuanto más alto, más fuera (alas en V); vacío en las dos = Seurat prueba las aperturas y se queda con la que mejor encaja con los sprites de frente y espalda', -2, 3, 0.1],
     ['out_back', 'Se abre hacia atrás', '1 = cuanto más atrás, más fuera (alas echadas atrás)', -2, 3, 0.1], ['thickness', 'Grosor', 'voxels', 2, 6, 1],
     ['far', 'El ala de detrás', 'el ala lejana que el sprite lateral deja asomar detrás de la cercana: Seurat la busca y no la construye', FAR]],
   decal: [], skip: [],

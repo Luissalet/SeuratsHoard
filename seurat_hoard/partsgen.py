@@ -63,12 +63,10 @@ PART TYPES
   side fins. "offset": how far from the middle line the middle of each one is; "width": how thick each one is across.
 - "wings": two flat sheets that start at the body and open outwards: wings, big ears, the halves of a cape.
   "root": [column, row] of the side sprite where the wing joins the body (the shoulder). "span": total width from tip to
-  tip, read from the front or back sprite. "out_up" and "out_back": how the sheet leaves the body. From the side the
-  sheet always shows its whole face. out_back turns that face to the front and back cameras too (the further back a
-  pixel is in the profile, the further out it sits): without it the wings are a thin line seen from the front or from
-  behind, which is almost never right. out_up raises them in a V (the higher a pixel, the further out). Leave both
-  out to get out_up 0.5, out_back 1, good for most wings; give more out_up for a steep V, more out_back for wings
-  held flatter. "thickness": 2 or 3.
+  tip, read from the front or back sprite. "thickness": 2 or 3. How the sheet opens (straight up in a thin V, or back
+  with its face to the front and back cameras, or between) is NOT yours to give: Seurat builds every opening and keeps
+  the one whose front and back views match those sprites best. A flat sheet cannot do more than that, so do not spend
+  actions on the wings' angle: get their pixels, their root and their span right.
 - "decal": a marking that is only on the flanks: an eye, a cheek spot. It is exactly the pixels of its shapes.
 - "skip": NOT BUILT. Side sprites often let the FAR wing, arm, leg or ear peek out behind the near one, shifted, only so
   the drawing reads well. That is a stylistic choice of the sprite, not anatomy: from the front and from behind both
@@ -92,7 +90,7 @@ in a patch two parts share, a polygon or a shape with "colors" is taken at its w
 ACTIONS. Answer ONE JSON object each time:
 {"action": "build", "notes": "what you decided", "plan": {"facing": "right", "eye": [30, 9], "parts": [{"name": "body", "type": "solid",
  "where": [[10, 12, 24, 30]], "width": 12}, ...]}}       ("facing": where the head points in the side sprite)
-{"action": "adjust", "notes": "...", "set": {"wings": {"span": 44, "out_up": 0.8}, "body": {"width": 14}},
+{"action": "adjust", "notes": "...", "set": {"wings": {"span": 44, "root": [18, 15]}, "body": {"width": 14}},
  "add": [{...a whole part...}], "remove": ["name"]}        changes the last plan and rebuilds; give "where" again to
                                                             reshape a part; a part added with an existing name replaces it;
                                                             "eye": [column, row] beside "set" moves the eye
@@ -115,9 +113,8 @@ character from every side in the lit views. Usual faults: wings too short or too
 (out_up / out_back), not touching the body (root), a body too thin or too fat (width), legs fused in the middle
 (offset), the far wing built as if it belonged to the near one or as a neck or a slab on the middle line (skip it:
 between the wings the back sprite has only the head and what is on it), a crest built as a ball, a part that took its
-neighbour's pixels, a tail fan built as a ball. Do NOT tune out_up / out_back to shave red or blue pixels off the wings: those sprites hold
-the wings in another pose than the side sprite, so wing silhouettes never match; change them only when the wings look
-wrong in the lit views (a thin line from the front, lying flat, pointing forwards). Change a few things at a time with adjust and finish with done when it reads right."""
+neighbour's pixels, a tail fan built as a ball. The wings' silhouettes never match those two sprites exactly: they hold the wings in another
+pose than the side sprite, and the opening is already the best a flat sheet gives. Leave it. Change a few things at a time with adjust and finish with done when it reads right."""
 
 FIRST = """Rebuild this character in voxels from its sprites.
 {prompt}
@@ -262,10 +259,10 @@ def construct(profile: sp.Profile, plan: dict[str, Any], sprites: dict[str, np.n
               camera: Optional[dict[str, float]] = None) -> tuple[sp.Built, dict[str, float], dict[str, Any]]:
     """Plan to voxels: build, find the cameras of the front and back sprites, paint the fans' ends. Returns the model
     as built, the cameras and how each view matches."""
-    built = sp.build(profile, plan)
+    fam = sp.families_of(*[sprites.get(r) for r in ("side", "front", "back")])
+    built = sp.build(profile, sp.tune_wings(profile, plan, sprites, fam))
     if max(built.grid.shape) > MAX_SIDE:
         raise sp.PlanError(f"the model would be {built.grid.shape} voxels: reduce spans and widths")
-    fam = sp.families_of(*[sprites.get(r) for r in ("side", "front", "back")])
     depths = sp.tune_camera(built, sprites, fam, camera)
     sp.paint_caps(built, sprites, depths, fam)
     views = sp.evaluate(built, sprites, depths, fam=fam)["views"]
@@ -441,14 +438,21 @@ def _base_model(svc: Any, p: dict[str, Any]) -> Optional[VoxelModel]:
     return m if src.get("method") == "parts" and isinstance(src.get("plan"), dict) else None
 
 
-def _drop_keep(plan: dict[str, Any]) -> list[str]:
-    """Takes "far": "keep" out of a plan written by the model (a person can ask for it in the panel or with the
-    tools). Returns the names of the parts that had it."""
+def _drop_keep(plan: dict[str, Any], opening: bool = False) -> list[str]:
+    """Takes out of a plan written by the model what is not its to decide: "far": "keep" and the opening of the wings
+    (out_up, out_back, curl), which Seurat finds against the sprites, unless ``opening`` (the user asked for a change in
+    words, and it may be about the wings). A person can give them in the panel or with the tools. Returns the names of
+    the parts that had "far": "keep"."""
     names = []
     for part in plan.get("parts") or []:
-        if isinstance(part, dict) and str(part.get("far") or "").lower() == "keep":
+        if not isinstance(part, dict):
+            continue
+        if str(part.get("far") or "").lower() == "keep":
             part.pop("far")
             names.append(str(part.get("name")))
+        if not opening:
+            for key in ("out_up", "out_back", "curl"):
+                part.pop(key, None)
     return names
 
 
@@ -647,6 +651,7 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
         minutes=int((deadline - time.time()) / 60))
     user_images = [board] + extra_imgs
     plans: dict[int, dict[str, Any]] = {}
+    free_opening = False
 
     def match_text() -> str:
         return ", ".join(f"{r}: silhouettes overlap {v['iou']:.2f}, {v['missing']:.0%} of the sprite missing, {v['extra']:.0%} extra"
@@ -656,8 +661,12 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
         # carrying on from a model built by parts: its plan is step 0, and what the user asks now comes first
         plans[0] = state["plan"]
         asked = str(p.get("prompt") or "").strip()
+        free_opening = bool(asked)
         user_text += CONTINUE.format(
-            request=("What the user asks for now, do it first: " + asked) if asked else "Look for what is still wrong and fix it.",
+            request=("What the user asks for now, do it first: " + asked + "\nIf it is about how the wings open you may, this time, set "
+                     '"out_up" (raises the sheet in a V: the higher a pixel, the further out) and "out_back" (turns its face to the '
+                     "front and back cameras: the further back a pixel, the further out) on the wings; 0.5 and 0.9 is a usual opening.")
+            if asked else "Look for what is still wrong and fix it.",
             count=model.count, size=model.size, report=sp.report(state["built"]), match=match_text(),
             plan=json.dumps(_plan_text(state["plan"]), ensure_ascii=False))
         user_images = [board] + extra_imgs[:1] + [b for b in state["pics"] if b]
@@ -746,7 +755,7 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
             user_text, user_images = ("Your answer had no valid action. Answer ONE JSON object: build (with a complete plan), adjust "
                                       "(with set / add / remove), look (with a view), revert (with a step) or done."), []
             continue
-        kept_far = _drop_keep(plan)
+        kept_far = _drop_keep(plan, opening=free_opening)
         problem = apply(plan, step, notes)
         if problem:
             job.say(f"{label}: el plan no se pudo construir ({problem[:200]})")

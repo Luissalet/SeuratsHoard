@@ -616,6 +616,48 @@ def _check_eye(p: Profile, plan: dict[str, Any], parts: list[dict[str, Any]], la
                      f"make sure that is the eye and that shape the head")
 
 
+def _floating(pid: np.ndarray, solid: list[int]) -> Optional[np.ndarray]:
+    """The voxels that cannot be reached from the solids through touching voxels (26 neighbours), or None when
+    there is no solid to start from."""
+    occ = pid > 0
+    reach = occ & np.isin(pid, solid)
+    if not reach.any():
+        return None
+    while True:
+        grown = reach.copy()
+        for axis in range(3):                    # the 26 neighbours, one axis at a time
+            lo = [slice(None)] * 3
+            hi = [slice(None)] * 3
+            lo[axis], hi[axis] = slice(1, None), slice(None, -1)
+            step = grown.copy()
+            step[tuple(lo)] |= grown[tuple(hi)]
+            step[tuple(hi)] |= grown[tuple(lo)]
+            grown = step
+        grown &= occ
+        if grown.sum() == reach.sum():
+            break
+        reach = grown
+    return occ & ~reach
+
+
+def _check_floating(grid: np.ndarray, pid: np.ndarray, parts: list[dict[str, Any]], notes: list[str]) -> None:
+    """Wings, limbs and decorations must touch the body. What still floats after the joining in ``build`` (nothing of
+    the part meets the body in the profile either) is said: a wing whose shape misses the pixels that join it to the
+    shoulder, a root in the wrong place."""
+    loose = _floating(np.where(grid > 0, pid, 0), [k + 1 for k, part in enumerate(parts) if part["type"] == "solid"])
+    if loose is None or not loose.any():
+        return
+    count = np.bincount(pid[loose].astype(np.int64), minlength=len(parts) + 1)
+    for k, part in enumerate(parts):
+        n = int(count[k + 1])
+        if n >= 6:
+            part["floating"] = n
+            notes.append(f"{n} voxels of '{part['name']}' float in the air, touching nothing of the body"
+                         + (": the part misses the pixels that join it to the body (a wing reaches down to the shoulder it hangs "
+                            "from), or its root is not where it meets the body" if part["type"] in ("wings", "pair") else
+                            ": give the pixels between it and the body to one of the two"))
+
+
 def _check_stand(p: Profile, parts: list[dict[str, Any]], label: np.ndarray, notes: list[str]) -> None:
     """What the figure stands on. A narrow foot at the very bottom that belongs to a part on the middle line becomes
     ONE central leg; legs are a pair."""
@@ -1096,6 +1138,53 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
                 put(lo_near, hi_near, m, k)
             if side in ("both", "far"):
                 put(2 * cx - 1 - hi_near, 2 * cx - 1 - lo_near, m, k)
+    # ---- nothing floats: a wing or a limb that ends up beside the body without touching it (the body is rounder than
+    # the sheet is close) is joined to the middle plane where the two meet in the profile
+    body_px = np.zeros((h, w), bool)
+    for k in median_ids:
+        body_px |= full[k]
+    bp = np.pad(body_px, 1)
+    near_body = (bp[:-2, :-2] | bp[:-2, 1:-1] | bp[:-2, 2:] | bp[1:-1, :-2] | bp[1:-1, 1:-1] | bp[1:-1, 2:] | bp[2:, :-2] | bp[2:, 1:-1] | bp[2:, 2:])
+    solids = [k + 1 for k in median_ids if parts[k]["type"] == "solid"]
+    for _ in range(4):                                   # a part can float in several pieces
+        loose = _floating(pid, solids) if body_px.any() else None
+        if loose is None or not loose.any():
+            break
+        joined = False
+        for k, part in enumerate(parts):
+            if part["type"] not in ("pair", "wings"):
+                continue
+            mine = loose & (pid == k + 1)
+            if int(mine.sum()) < 6:
+                continue
+            # the sprite pixels whose voxels float, and of those the ones that meet the body in the profile
+            px = np.zeros((h, w), bool)
+            vy, vz = np.nonzero(mine.any(axis=0))
+            rr_, cc_ = (h - 1) - (vy - y0), vz - z0
+            ok = (rr_ >= 0) & (rr_ < h) & (cc_ >= 0) & (cc_ < w)
+            px[rr_[ok], cc_[ok]] = True
+            touch = px & full[k] & near_body
+            if not touch.any():
+                continue
+            inner = centre[k] - half[k]
+            join = touch & (inner <= float(inner[touch].min()) + 1.0)
+            outer = np.rint(cx - centre[k] - half[k]).astype(np.int64)
+            mid = np.full((h, w), cx - 1, np.int64)
+            side = part.get("side") or "both"
+            if side in ("both", "near"):
+                put(np.minimum(outer, mid), mid, join, k)
+            if side in ("both", "far"):
+                put(2 * cx - 1 - mid, 2 * cx - 1 - np.minimum(outer, mid), join, k)
+            part["joined"] = int(part.get("joined") or 0) + int(join.sum())
+            joined = True
+            gap = float(inner[join].min())
+            if gap > 3.5 and not part.get("bridged"):
+                part["bridged"] = True
+                notes.append(f"'{part['name']}' did not touch the body: Seurat joined it with a bar {gap:.0f} voxels long. Its shape "
+                             f"probably misses the pixels that take it down to where it hangs from the body (a wing covers the "
+                             f"shoulder too), or the body took them")
+        if not joined:
+            break
     # ---- colour: what is exposed shows the sprite, what is inside (or hidden behind another part in the sprite) shows
     # the part's own colour
     occ = pid > 0
@@ -1129,6 +1218,7 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
         notes.append(f"{missing} sprite pixels got no voxel")
     for part in parts:
         part.pop("where", None)
+    _check_floating(grid, pid, parts, notes)
     return Built(grid, palette, label, {"z0": z0, "y0": y0, "cx": cx, "w": w, "h": h}, parts, notes, pid)
 
 

@@ -50,7 +50,11 @@ images). Connector preset: its own `faustus-plugin.json`.
   and `far: keep` builds it. Plan key `eye` ([column, row] of the side sprite, `_check_eye`): a plan whose eye lies off
   the figure, in a wings, fan, fin or skip part, or in the back third for its `facing` raises `PlanError` (the model reads
   the sprite again); a note warns when nothing around it looks like an eye. Other notes in the report: a skip part of colours no wings or
-  pair part has (`_check_skips`), a narrow foot at the bottom rows owned by a solid (`_check_stand`). Plans written by the
+  pair part has (`_check_skips`), a narrow foot at the bottom rows owned by a solid (`_check_stand`). Nothing floats: voxels of a pair or wings part that
+  cannot be reached from the solids through touching voxels (`_floating`, 26 neighbours) are joined to the middle plane at
+  the pixels where the part meets the body in the profile (`joined`; a note when the bar is longer than 3 voxels, which
+  means the shape misses pixels), and what still floats is said (`_check_floating`). Plans written by the model cannot
+  force `paint` either. Plans written by the
   model never keep the far copy (`partsgen._drop_keep`); a person can, in the panel or with the tools. Carrying on (`partsgen._base_model`): `continue_from` (or `into` with
   start `current`) on a model whose source is a parts plan builds that plan as step 0 and opens the loop with the sprites
   kept in `source.entries`, the pictures of the model and the prompt as the request; UI *Pedir el cambio* in the parts

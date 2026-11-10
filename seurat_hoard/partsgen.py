@@ -42,24 +42,30 @@ colours, tones its ink lines down and mirrors everything left-right.
 PART TYPES
 - "solid": on the middle line of the body, puffed up round: body, head, neck, snout, beak, a thick tail, a bushy crest.
   "width": how wide it is across at its widest, in voxels (= pixels of the front and back sprites). Without width it is
-  as wide as it is thick in profile.
-- "fin": a thin slab on the middle line: a crest or sail seen edge-on from the front, a dorsal fin, a blade.
-  "thickness": 2 to 6.
+  as wide as it is thick in profile. Its flanks take the side sprite; when the front or back sprite shows the same
+  pose as the model, Seurat paints what faces that camera (a face, the back of the hair) from it by itself.
+  "paint": "none" keeps the side sprite's colours all around, "front", "back" or "both" forces the painting.
+- "fin": a thin slab on the middle line: a crest or plume of feathers, a sail, a dorsal fin, a blade, a comb.
+  "thickness": 2 to 6. A crest is a fin (or a solid with a small width), never a ball.
 - "fan": on the middle line, narrow at its root and widening away from it, with a flat end: a tail fan, a skirt, a mane.
   "base": its width where it starts, "width": its width at the far end. Seurat paints its end from the back sprite.
 - "pair": something the character has twice, one on each side, drawn once in the profile: legs, feet, arms, ears, horns,
   side fins. "offset": how far from the middle line the middle of each one is; "width": how thick each one is across.
 - "wings": two flat sheets that start at the body and open outwards: wings, big ears, the halves of a cape.
   "root": [column, row] of the side sprite where the wing joins the body (the shoulder). "span": total width from tip to
-  tip, read from the front or back sprite. "out_up" and "out_back": the direction in which the sheet leaves the body.
-  out_up 1, out_back 0: the higher a wing pixel is, the further out it sits (wings raised in a V). out_up 0, out_back 1:
-  the further back a pixel is, the further out (wings swept back, standing like raised hands). Mix them (1 and 0.7:
-  raised and swept). "thickness": 2 or 3.
+  tip, read from the front or back sprite. "out_up" and "out_back": how the sheet leaves the body. From the side the
+  sheet always shows its whole face. out_back turns that face to the front and back cameras too (the further back a
+  pixel is in the profile, the further out it sits): without it the wings are a thin line seen from the front or from
+  behind, which is almost never right. out_up raises them in a V (the higher a pixel, the further out). Leave both
+  out to get out_up 0.5, out_back 1, good for most wings; give more out_up for a steep V, more out_back for wings
+  held flatter. "thickness": 2 or 3.
 - "decal": a marking that is only on the flanks: an eye, a cheek spot. It is exactly the pixels of its shapes.
 - "skip": NOT BUILT. Side sprites often let the FAR wing, arm, leg or ear peek out behind the near one, shifted, only so
   the drawing reads well. That is a stylistic choice of the sprite, not anatomy: from the front and from behind both
   wings sit at the same height, and in 3D the mirrored near one already IS the far one. Give the far copy its own part
-  of type skip (whatever of the body lies under it is completed). Never build both copies as one big wing.
+  of type skip (whatever of the body lies under it is completed). Never build both copies as one big wing. How to spot
+  it: a second shape with the near wing's colours right beside it, usually behind and a little higher, that leaves the
+  body and ends in a point with nothing on it. It is NOT a neck: a neck is what joins the head to the body.
 
 WHERE A PART IS. "where": a list of shapes in SIDE-sprite pixels, numbered as in the pixel map (column from the left,
 row from the top): a rectangle [col0, row0, col1, row1] (inclusive) or a polygon {"poly": [[col, row], ...]}. Add
@@ -90,8 +96,9 @@ by hand, each in its own pose (wings a little higher or lower, a tail hanging di
 do not chase a pixel-perfect overlap: chase the right structure and the right sizes, and a figure that reads as the
 character from every side in the lit views. Usual faults: wings too short or too long (span), opening the wrong way
 (out_up / out_back), not touching the body (root), a body too thin or too fat (width), legs fused in the middle
-(offset), the far wing built as if it belonged to the near one (skip it), a part that took its neighbour's pixels, a
-tail fan built as a ball. Change a few things at a time with adjust and finish with done when it reads right."""
+(offset), the far wing built as if it belonged to the near one or as a neck or a slab on the middle line (skip it:
+between the wings the back sprite has only the head and what is on it), a crest built as a ball, a part that took its
+neighbour's pixels, a tail fan built as a ball. Change a few things at a time with adjust and finish with done when it reads right."""
 
 FIRST = """Rebuild this character in voxels from its sprites.
 {prompt}

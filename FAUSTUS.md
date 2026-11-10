@@ -1,6 +1,6 @@
 # Seurat's Hoard — what it can and cannot do
 
-App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_server.py` (29 tools; `model_look`,
+App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_server.py` (32 tools; `model_look`,
 `model_sprite_match` and `reference_look` return MCP images). Connector preset: its own `faustus-plugin.json`.
 
 ## Can
@@ -23,6 +23,30 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
   (exact old/new replacements on the program of the last version that ran, then run; the edited program is shown
   back), `revert` (back to the best version so far, sprite target), `look` (large render from any side) and `done`; budgets `agent_steps` (16), `agent_minutes` (90) and `agent_step_thinking`
   (30 000 per action). Each working run is saved; the program and brief stay in the source.
+- Characters by parts (`spriteparts.py`, `partsgen.py`; generation `method: parts`, picked on its own when a reference
+  has role `side` and is a sprite and no method is given; tools `sprite_parts_read`, `model_from_parts`,
+  `model_parts_adjust`; UI method *Automático* / *Personaje por partes* and the panel *Partes del personaje*,
+  `static/parts.js`). The side sprite is read into a profile: ink colours (dark and found on the figure's edge far
+  more than their share), cells (patches of one colour between lines). A plan `{"facing", "parts": [...]}` gives each
+  part a `type` and rough shapes in side-sprite columns and rows (`where`: rectangles, polygons, per-shape or per-part
+  `colors` as map letters or hex; `cells`; `except`): a cell mostly inside a part's shapes goes to it whole (the last
+  such part wins), otherwise it is split along the shapes; lines and leftovers join their neighbours. Types: `solid`
+  (all solids are puffed up as one volume with circular sections scaled by `aspect` or to `width`, blended across joins),
+  `fin` (`thickness`), `fan` (`base`, `width` or `spread`, `root`, `towards`; flat end), `pair` (`offset`, `width` or
+  `thickness`, `lean`, `side` both/near/far), `wings` (flat sheets hinged at `root`: `out_up`, `out_back`, `span`,
+  `offset`, `thickness`), `decal` (exact pixels, shown only where the side cameras see), `skip` (not built; what lies
+  under it is completed from the median parts). Guarantees: every sprite pixel that is not skipped is a column of voxels,
+  nothing outside the silhouette, left-right symmetric, the first voxel from each side shows the sprite's pixel.
+  Colours: the outline on the figure's edge takes its part's colour (`outline`: drop/keep/shade), inner ink is toned
+  down (`ink`: soften/keep/drop), exposed voxels show the sprite's pixel and inner ones the part's own colour (also
+  under what hides it). The game camera is oblique (`project`: heights kept, depth shifts the picture by `depth` pixels
+  per voxel); `tune_camera` finds the depth of the front and back sprites; `compare` gives the silhouette overlap and a
+  match that only counts pixels of the same colour family; `paint_caps` lays the back (or front) sprite's picture of a
+  fan over the voxels that camera sees and the side cameras do not. The generation is an action loop (build, adjust,
+  look, done; `parts_steps` 8 by default, the agent's minutes and thinking per step, twice the thinking for the first
+  plan): after every build the model gets the report of each part, the parts picture, the sprite comparison and the lit
+  views; each build is a version and a round (`render`, `sprite_render`, `parts_render`). The plan, the cameras and the
+  reference roles stay in the model's source, so `model_parts_adjust` rebuilds it with changes.
 - Sprite target (`target`: auto/sprite/free; auto = sprite when the front/back/side pictures are small pixel art): the
   sprites are the design to rebuild in 3D at one voxel per sprite pixel (`spritecam.grid_size`: X from the front/back
   width, Y and Z from the side sprite). The side sprite is a true profile (`sprite_side_pitch` 0), counts double in the

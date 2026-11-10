@@ -10,3 +10,8 @@
 - Sprites animados: leer todos los fotogramas de un GIF o de una hoja de sprites y usar las poses como vistas extra.
 - Vista de rondas en 3D: abrir en el editor cualquier ronda intermedia de una generación, no solo el resultado.
 - Exportar animaciones de giro (GIF/WebM) desde los renders isométricos.
+- Partes: usar la vista de frente como perfil cuando no hay sprite lateral (personajes dibujados solo de frente).
+- Partes: proponer solas las alas, las patas y los abanicos sin modelo de lenguaje, comparando hipótesis contra los
+  sprites de frente y espalda.
+- Partes: alas y aletas curvadas o plegadas (hoy son láminas planas) y extremidades lejanas con pose propia.
+- Partes: llevar los dibujos de frente y espalda a más partes que los abanicos (cara de frente, dorso).

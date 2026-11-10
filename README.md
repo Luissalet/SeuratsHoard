@@ -13,6 +13,20 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
     program, gets the result or the error with the failing line, looks at the model from any side, fixes and refines
     (rewriting the program or editing parts of it, and going back to its best version when a change makes it worse),
     and says when it is finished (step and time budgets in Settings). Every run that works is saved.
+  - *Characters by parts* (`method: parts`; what runs on its own when there is a side sprite): the side sprite is the
+    model's exact profile (every pixel is a column of voxels) and a plan says what each part is across the body: `solid`
+    (a rounded solid on the middle plane: body, head, thick tail), `fin` (a thin slab), `fan` (widens away from its root;
+    its end is painted from the back sprite), `pair` (legs, arms, ears: one on each side), `wings` (two flat sheets that
+    leave the body, with a span and a direction), `decal` (a marking only on the flanks: eyes) and `skip` (what the side
+    sprite shows only for looks, like the far wing peeking out: not built, the mirrored near one already is it). DeepSeek
+    decides that structure and reads the widths off the front and back sprites; the geometry, the colours (the black
+    outline goes, inner lines are toned down) and the comparison are Seurat's. After every plan it shows the model which
+    pixels each part caught, each sprite next to the model from its camera (oblique: heights are kept and depth shifts;
+    how much is found for each sprite) and the model lit from several sides, and the model adjusts or rewrites the plan.
+    Shapes are rough (rectangles or polygons in the sprite's columns and rows, with a colour filter): they snap to the
+    sprite's patches of colour and its lines. The plan stays with the model: the *Partes del personaje* panel changes
+    widths, wingspan, how the wings open, how far apart the legs are or what each part is, and rebuilds; the whole plan
+    can be edited there too.
   - *Game sprites as the target* (`target: sprite`, automatic for small pixel art): the front, back and side pictures
     are overworld sprites to rebuild in 3D, the way voxel mods do it (about one voxel per sprite pixel, the sprite's own
     colours and design). The side sprite is a true profile (no camera angle): the most important view, it counts double
@@ -44,7 +58,7 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
 - **Exports**: `.vox` (MagicaVoxel 150, round trip), `.glb` (vertex colours, greedy-meshed), binary `.stl` in millimetres
   (closed mesh, z up, setting `voxel_mm`), PNG of any view, and an isometric sprite strip from four sides. `.vox` files
   and Minecraft `.schem` schematics (WorldEdit) can be imported.
-- **Assistants** (MCP, `mcp_server.py`, 29 tools): list/create/edit models with operations (`model_ops`), look at them
+- **Assistants** (MCP, `mcp_server.py`, 32 tools): list/create/edit models with operations (`model_ops`), look at them
   (`model_look` returns a picture, also from the game overworld cameras), compare a model with game sprites from their
   camera (`model_sprite_match`), run voxel programs with the sprite tools (`model_program` with `sprites`), add references, build or generate from pictures, follow and cancel generations,
   export, versions, settings.

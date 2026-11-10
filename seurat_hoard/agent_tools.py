@@ -179,7 +179,7 @@ class GenerateArgs(BaseModel):
     steps: Optional[int] = Field(None, ge=2, le=60, description="agent: actions allowed (run, look, done); scene: actions per object; default from settings.")
     calibrate: Optional[bool] = Field(None, description="Sprite target: find each sprite's camera from the model's silhouette after the runs (default from settings, on).")
     minutes: Optional[int] = Field(None, ge=5, le=600, description="agent: time budget; default from settings.")
-    continue_from: str = Field("", max_length=64, description="agent: carry on from this model's voxel program and brief (e.g. a step of an earlier generation, restored first); new versions go to that model.")
+    continue_from: str = Field("", max_length=64, description="Carry on from this model; new versions go to it. A model built by parts carries on by parts from its plan and its own sprites, with the prompt as what to change (no references needed). agent: from the model's voxel program and brief (e.g. a step of an earlier generation, restored first).")
     target: Literal["auto", "sprite", "free"] = Field("auto", description="code/agent: sprite = the front/back/side pictures are game sprites to rebuild in 3D (judged from the game camera after every run); free = pictures are loose hints; auto = sprite when they are small pixel art.")
     sprite_pitch: Optional[int] = Field(None, ge=0, le=89, description="Sprite target: degrees above the horizon of the camera of the front and back sprites; default from settings (45).")
     sprite_side_pitch: Optional[int] = Field(None, ge=0, le=89, description="Sprite target: degrees above the horizon of the camera of the side sprites; default from settings (0: a true profile).")

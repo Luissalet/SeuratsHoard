@@ -97,6 +97,7 @@ ACTIONS. Answer ONE JSON object each time:
                                                             reshape a part; a part added with an existing name replaces it;
                                                             "eye": [column, row] beside "set" moves the eye
 {"action": "look", "view": "front_right" | "front_left" | "back_left" | "back_right" | "front" | "back" | "side" | "top"}
+{"action": "revert", "notes": "...", "step": 2}            goes back to the plan of an earlier step that was better
 {"action": "done", "notes": "why it is finished"}
 
 AFTER EVERY BUILD you get three pictures:
@@ -136,14 +137,27 @@ You have up to {steps} actions and about {minutes} minutes. Think the anatomy th
 which shape is the head; which pixels are the body, each limb; which limb is the far copy drawn for looks; how wide each part is in the front and back sprites;
 how the wings leave the body. Then answer a first complete plan with action build."""
 
-AFTER = """Built: {count} voxels in a grid of {size}.
+CONTINUE = """
+
+THIS CHARACTER IS ALREADY BUILT: you are continuing it, not starting over. Its report and plan are below, and the
+pictures after the sprites show it (its pixels by part; each sprite against the model; the model lit).
+{request}
+Keep what is right. Answer with adjust (build only if the plan is wrong at its root), or done if nothing has to change.
+Built: {count} voxels in a grid of {size}.
+{report}
+Front and back sprites against the model from their cameras: {match}.
+The plan as built:
+{plan}"""
+
+AFTER = """Step {step}. Built: {count} voxels in a grid of {size}.
 {report}
 Front and back sprites against the model from their cameras: {match}.
 Pictures: (1) the side sprite and its pixels by part, (2) each sprite, the model from its camera and the silhouette
 difference, (3) the model lit from {views}.
 Be a harsh critic: first the parts picture (did every part catch its pixels?), then the structure and widths against
 the front and back sprites, then how it reads in 3D. List what is wrong, then answer the next action: adjust (a few
-changes), build (a whole new plan), look, or done if it reads right from every side."""
+changes), build (a whole new plan), look, revert (if an earlier step was better than this one), or done if it reads
+right from every side."""
 
 
 def png(img: Image.Image) -> bytes:
@@ -324,6 +338,20 @@ def _union_palette(profile: sp.Profile, sprites: dict[str, np.ndarray]) -> tuple
 
 
 # ---------------------------------------------------------------------------------------------- the generation
+def _base_model(svc: Any, p: dict[str, Any]) -> Optional[VoxelModel]:
+    """The model a generation carries on from, when it was built by parts: ``continue_from``, or the model it writes
+    into when the start is the current model."""
+    mid = p.get("continue_from") or (p.get("into") if p.get("start") == "current" else "")
+    if not mid:
+        return None
+    try:
+        m = svc.store.get(str(mid))
+    except Exception:  # noqa: BLE001
+        return None
+    src = m.source or {}
+    return m if src.get("method") == "parts" and isinstance(src.get("plan"), dict) else None
+
+
 def _drop_keep(plan: dict[str, Any]) -> list[str]:
     """Takes "far": "keep" out of a plan written by the model (a person can ask for it in the panel or with the
     tools). Returns the names of the parts that had it."""
@@ -342,6 +370,8 @@ def wants(gen: Any, job: Any) -> bool:
     method = p.get("method")
     if method == "parts":
         return True
+    if not method and p.get("use_model") is not False and _base_model(gen.svc, p) is not None:
+        return True                              # a model built by parts carries on by parts
     if method or p.get("continue_from") or p.get("start") == "current" or p.get("use_model") is False:
         return False
     try:
@@ -383,6 +413,16 @@ def run(gen: Any, job: Any) -> VoxelModel:
 
     job.say("leyendo los sprites")
     entries = [{**r, "role": r.get("role") or "front"} for r in (p.get("references") or [])]
+    start = _base_model(svc, p)
+    if start is not None and start.source.get("entries"):
+        # carrying on a model: the sprites it was made from, whatever is attached now (unless one of them is gone)
+        own = [dict(e) for e in start.source["entries"]]
+        try:
+            for r in own:
+                svc.store.reference(r["id"])
+            entries = own
+        except Exception:  # noqa: BLE001
+            pass
     for r in entries:
         svc.store.reference(r["id"])
     sprites, others = read_sprites(svc, entries)
@@ -393,6 +433,9 @@ def run(gen: Any, job: Any) -> VoxelModel:
                                              .replace(" side", "").replace("(sprite)", "").strip() + " (voxel)")
     into = p.get("into") or ""
     use_model = p.get("use_model", True)
+    base = _base_model(svc, p)
+    if base is not None and not into:
+        into = base.id                          # carrying on a model: its new versions are its own
     profile = sp.read_profile(sprites["side"])
     palette, inks = _union_palette(profile, sprites)
     model = svc.store.get(into) if into else VoxelModel.empty(svc.store.new_id(), name, [8, 8, 8], list(profile.palette))
@@ -455,6 +498,11 @@ def run(gen: Any, job: Any) -> VoxelModel:
         return ""
 
     llm_name = ""
+    if base is not None and use_model:
+        problem = apply(json.loads(json.dumps(base.source["plan"])), 0, "plan de partida")
+        if problem:
+            raise SeuratError("invalid", f"The model's plan cannot be built any more: {problem}",
+                              "Generate it again from its sprites.")
     if not use_model:
         problem = apply(p.get("plan") or sp.auto_plan(profile), 1, "plan automático" if not p.get("plan") else "plan dado")
         if problem:
@@ -509,6 +557,21 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
         others="\n".join(other_maps), measures="\n".join(measures), steps=max_steps,
         minutes=int((deadline - time.time()) / 60))
     user_images = [board] + extra_imgs
+    plans: dict[int, dict[str, Any]] = {}
+
+    def match_text() -> str:
+        return ", ".join(f"{r}: silhouettes overlap {v['iou']:.2f}, {v['missing']:.0%} of the sprite missing, {v['extra']:.0%} extra"
+                         for r, v in state["views"].items()) or "no front or back sprite to compare with"
+
+    if state["built"] is not None:
+        # carrying on from a model built by parts: its plan is step 0, and what the user asks now comes first
+        plans[0] = state["plan"]
+        asked = str(p.get("prompt") or "").strip()
+        user_text += CONTINUE.format(
+            request=("What the user asks for now, do it first: " + asked) if asked else "Look for what is still wrong and fix it.",
+            count=model.count, size=model.size, report=sp.report(state["built"]), match=match_text(),
+            plan=json.dumps(_plan_text(state["plan"]), ensure_ascii=False))
+        user_images = [board] + extra_imgs[:1] + [b for b in state["pics"] if b]
     history: list[dict[str, Any]] = []
     llm_name = ""
     for step in range(1, max_steps + 1):
@@ -543,7 +606,7 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
         action = str(data.get("action") or ("build" if isinstance(data.get("plan"), dict) else "")).lower()
         notes = str(data.get("notes") or "")[:600]
         history.append({"role": "user", "content": gen._content(user_text, user_images)})
-        history.append({"role": "assistant", "content": json.dumps({k: data.get(k) for k in ("action", "notes", "plan", "set", "add", "remove", "eye", "view")
+        history.append({"role": "assistant", "content": json.dumps({k: data.get(k) for k in ("action", "notes", "plan", "set", "add", "remove", "eye", "view", "step")
                                                                     if data.get(k) is not None}, ensure_ascii=False)})
         for msg in history[:-2]:                      # old pictures are dropped, the words stay
             if isinstance(msg.get("content"), list):
@@ -579,9 +642,20 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
                 plan = dict(plan, eye=data["eye"])
         elif action == "build" and isinstance(data.get("plan"), dict):
             plan = data["plan"]
+        elif action == "revert":
+            try:
+                back = int(data.get("step"))
+            except (TypeError, ValueError):
+                back = -1
+            if back not in plans:
+                user_text, user_images = (f"There is no built step {data.get('step')!r} to go back to; the built steps are "
+                                          f"{sorted(plans) or 'none'}. Next action?"), []
+                continue
+            plan = json.loads(json.dumps(plans[back]))
+            notes = notes or f"vuelta al paso {back}"
         else:
             user_text, user_images = ("Your answer had no valid action. Answer ONE JSON object: build (with a complete plan), adjust "
-                                      "(with set / add / remove), look (with a view) or done."), []
+                                      "(with set / add / remove), look (with a view), revert (with a step) or done."), []
             continue
         kept_far = _drop_keep(plan)
         problem = apply(plan, step, notes)
@@ -593,10 +667,11 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
                                       + (" (the model shown before is unchanged)." if state["built"] is not None else "."), [])
             continue
         built = state["built"]
-        match = ", ".join(f"{r}: silhouettes overlap {v['iou']:.2f}, {v['missing']:.0%} of the sprite missing, {v['extra']:.0%} extra"
-                          for r, v in state["views"].items()) or "no front or back sprite to compare with"
-        user_text = AFTER.format(count=model.count, size=model.size, report=sp.report(built), match=match,
+        plans[step] = state["plan"]
+        user_text = AFTER.format(step=step, count=model.count, size=model.size, report=sp.report(built), match=match_text(),
                                  views="front right, back left, front, back, side and top")
+        if len(plans) > 1:
+            user_text += "\nBuilt steps you can revert to: " + ", ".join(str(n) for n in sorted(plans) if n != step) + "."
         if kept_far:
             user_text += ('\n"far": "keep" was ignored on ' + ", ".join(kept_far) + ": the far wing or limb a side sprite lets peek out "
                           "is drawn for looks and is not built here. If that area is really something else, give it its own part.")

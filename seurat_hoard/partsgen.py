@@ -77,7 +77,8 @@ PART TYPES
   it: a second shape with the near wing's colours right beside it, usually behind and a little higher, that leaves the
   body and ends in a point with nothing on it. It is NOT a neck: a neck is what joins the head to the body.
   Seurat also looks for it inside every wings and pair part (a second area of the same colours behind a line of its
-  own) and leaves it out by itself; the report says so, and "far": "keep" on that part builds it after all.
+  own) and leaves it out by itself; the report says so. Do not bring it back to gain overlap with the front or back
+  sprite: seen from there the far wing IS the mirrored near one.
 
 WHERE A PART IS. "where": a list of shapes in SIDE-sprite pixels, numbered as in the pixel map (column from the left,
 row from the top): a rectangle [col0, row0, col1, row1] (inclusive) or a polygon {"poly": [[col, row], ...]}. Add
@@ -323,6 +324,17 @@ def _union_palette(profile: sp.Profile, sprites: dict[str, np.ndarray]) -> tuple
 
 
 # ---------------------------------------------------------------------------------------------- the generation
+def _drop_keep(plan: dict[str, Any]) -> list[str]:
+    """Takes "far": "keep" out of a plan written by the model (a person can ask for it in the panel or with the
+    tools). Returns the names of the parts that had it."""
+    names = []
+    for part in plan.get("parts") or []:
+        if isinstance(part, dict) and str(part.get("far") or "").lower() == "keep":
+            part.pop("far")
+            names.append(str(part.get("name")))
+    return names
+
+
 def wants(gen: Any, job: Any) -> bool:
     """Whether a generation job is one for this method: asked for (``method: parts``), or a sprite target with a side
     sprite and no method given while the setting ``sprite_method`` is parts (the default)."""
@@ -571,6 +583,7 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
             user_text, user_images = ("Your answer had no valid action. Answer ONE JSON object: build (with a complete plan), adjust "
                                       "(with set / add / remove), look (with a view) or done."), []
             continue
+        kept_far = _drop_keep(plan)
         problem = apply(plan, step, notes)
         if problem:
             job.say(f"{label}: el plan no se pudo construir ({problem[:200]})")
@@ -584,6 +597,9 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
                           for r, v in state["views"].items()) or "no front or back sprite to compare with"
         user_text = AFTER.format(count=model.count, size=model.size, report=sp.report(built), match=match,
                                  views="front right, back left, front, back, side and top")
+        if kept_far:
+            user_text += ('\n"far": "keep" was ignored on ' + ", ".join(kept_far) + ": the far wing or limb a side sprite lets peek out "
+                          "is drawn for looks and is not built here. If that area is really something else, give it its own part.")
         if not (state["plan"] or {}).get("eye"):
             user_text += ('\nThe plan has no "eye": add "eye": [column, row] (where the eye is in the side sprite) with your next build so '
                           "Seurat can check the head.")
@@ -595,6 +611,8 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
 def _plan_text(plan: dict[str, Any]) -> dict[str, Any]:
     """The plan without the values left to their defaults, to show it back compactly."""
     out = {"facing": plan.get("facing", "right"), "parts": []}
+    if plan.get("eye"):
+        out["eye"] = plan["eye"]
     for part in plan["parts"]:
         d = {k: v for k, v in part.items() if v is not None and not (k in sp.DEFAULTS.get(part["type"], {}) and v == sp.DEFAULTS[part["type"]][k])}
         out["parts"].append(d)

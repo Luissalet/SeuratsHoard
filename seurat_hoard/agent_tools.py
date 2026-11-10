@@ -646,7 +646,7 @@ def _parts_out(res: dict[str, Any]) -> dict[str, Any]:
     pics = res.pop("pictures")
     return {**res, "_image": _img(_stack([pics["parts"], pics["match"], pics["lit"]])),
             "hint": "The picture: the side sprite and its pixels by part; each sprite against the model from its camera; the model lit. "
-                    "Tune sizes with model_parts_adjust."}
+                    "Tune sizes with model_parts_adjust (\"far\": \"keep\" on a wings or pair part builds the far wing or limb Seurat left out)."}
 
 
 def _parts_read(svc: Services, a: PartsReadArgs) -> dict[str, Any]:

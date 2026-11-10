@@ -46,7 +46,9 @@ images). Connector preset: its own `faustus-plugin.json`.
   most pixels counting the other-coloured areas it carries) becomes a skip part named `<part> (far)`; the report says so
   and `far: keep` builds it. Plan key `eye` ([column, row] of the side sprite, `_check_eye`): a plan whose eye lies off
   the figure, in a wings, fan, fin or skip part, or in the back third for its `facing` raises `PlanError` (the model reads
-  the sprite again); a note warns when nothing around it looks like an eye. Guarantees: every sprite pixel that is not skipped is a column of voxels,
+  the sprite again); a note warns when nothing around it looks like an eye. Other notes in the report: a skip part of colours no wings or
+  pair part has (`_check_skips`), a narrow foot at the bottom rows owned by a solid (`_check_stand`). Plans written by the
+  model never keep the far copy (`partsgen._drop_keep`); a person can, in the panel or with the tools. Guarantees: every sprite pixel that is not skipped is a column of voxels,
   nothing outside the silhouette, left-right symmetric, the first voxel from each side shows the sprite's pixel. A `width` given to a solid or a fan is met exactly. `paint_faces`: a solid takes
   the front or back sprite's own pixels on the voxels that camera sees and whose surface looks more at it than sideways
   (`surface_normals`), when that sprite's silhouette overlaps the model's by `FACE_IOU` (0.82) or the part asks (`paint`:

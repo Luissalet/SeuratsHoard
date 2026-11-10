@@ -157,7 +157,7 @@ class GenerateArgs(BaseModel):
     effort: Optional[Literal["off", "low", "medium", "high", "max"]] = None
     use_model: bool = Field(True, description="false = only the starting model (no language model).")
     auto_paint: Optional[bool] = Field(None, description="Paint the reference pictures onto the sculpted shape after every round; default from settings.")
-    method: Optional[Literal["agent", "code", "ops"]] = Field(None, description="agent (default): the model runs, looks at and fixes its voxel program in a loop until it is done; code: fixed review rounds of programs; ops: JSON operations.")
+    method: Optional[Literal["agent", "code", "ops", "parts"]] = Field(None, description="parts (the default when there is a side sprite): a character from its sprites part by part, the model decides what each part of the profile is (body, wings, legs, fan, the far wing only drawn for looks) and Seurat does the geometry; agent (default otherwise): the model runs, looks at and fixes its voxel program in a loop until it is done; code: fixed review rounds of programs; ops: JSON operations.")
     steps: Optional[int] = Field(None, ge=2, le=60, description="agent: actions allowed (run, look, done); default from settings.")
     minutes: Optional[int] = Field(None, ge=5, le=600, description="agent: time budget; default from settings.")
     continue_from: str = Field("", max_length=64, description="agent: carry on from this model's voxel program and brief (e.g. a step of an earlier generation, restored first); new versions go to that model.")
@@ -444,6 +444,93 @@ TOOLS: list[Tool] = [
     Tool("settings_get", _d("Settings: reading size and colours, review rounds, reasoning effort and thinking tokens, auto paint, model URL, export scales."),
          Empty, ann(read_only=True), lambda s, a: s.settings.get()),
     Tool("settings_set", _d("Change settings."), SettingsArgs, ann(idempotent=True), _settings_set),
+]
+
+# ---------------------------------------------------------------------------------------------- characters by parts
+class PartsRef(BaseModel):
+    id: str
+    role: Literal["side", "front", "back", "extra", "sheet"] = Field("side", description="side = the profile that is cut into parts (needed); front and back give widths and are compared with the model.")
+    frames: list[int] = Field(default_factory=list, max_length=96)
+    cols: int = Field(0, ge=0, le=64)
+    rows: int = Field(0, ge=0, le=64)
+
+
+class PartsReadArgs(BaseModel):
+    references: list[PartsRef] = Field(..., min_length=1, max_length=6)
+    facing: Literal["right", "left"] = Field("right", description="Where the head points in the side sprite.")
+
+
+class PartsBuildArgs(BaseModel):
+    references: list[PartsRef] = Field(..., min_length=1, max_length=6)
+    plan: Optional[dict[str, Any]] = Field(None, description='{"facing": "right", "parts": [{"name", "type": solid | fin | fan | pair | wings | decal | skip, "where": [[col0, row0, col1, row1] or {"poly": [[col, row], ...]}], "colors": "letters", ...sizes}]}. Sizes by type: solid width; fin thickness; fan base, width; pair offset, width; wings root [col, row], span, out_up, out_back, thickness. Empty: the whole profile as one rounded solid.')
+    name: str = Field("", max_length=120)
+    into: str = Field("", max_length=64, description="Rebuild this model instead of making a new one (its voxels stay as a version).")
+
+
+class PartsAdjustArgs(ModelId):
+    set: dict[str, Any] = Field(default_factory=dict, description='Values to change, by part name: {"wings": {"span": 44, "out_up": 0.8}, "body": {"width": 14}}.')
+    add: list[dict[str, Any]] = Field(default_factory=list, max_length=24, description="Whole parts to add (one with an existing name replaces it).")
+    remove: list[str] = Field(default_factory=list, max_length=24)
+    plan: Optional[dict[str, Any]] = Field(None, description="A whole new plan instead of changes.")
+
+
+def _stack(pictures: list[bytes]) -> bytes:
+    """Several PNGs one under another in one picture."""
+    import io
+
+    from PIL import Image
+    imgs = [Image.open(io.BytesIO(b)).convert("RGBA") for b in pictures if b]
+    out = Image.new("RGBA", (max(i.width for i in imgs), sum(i.height for i in imgs) + 6 * (len(imgs) - 1)), (12, 10, 14, 255))
+    y = 0
+    for i in imgs:
+        out.paste(i, (0, y))
+        y += i.height + 6
+    buf = io.BytesIO()
+    out.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _parts_out(res: dict[str, Any]) -> dict[str, Any]:
+    pics = res.pop("pictures")
+    return {**res, "_image": _img(_stack([pics["parts"], pics["match"], pics["lit"]])),
+            "hint": "The picture: the side sprite and its pixels by part; each sprite against the model from its camera; the model lit. "
+                    "Tune sizes with model_parts_adjust."}
+
+
+def _parts_read(svc: Services, a: PartsReadArgs) -> dict[str, Any]:
+    from . import partsgen
+    res = partsgen.read_profile_info(svc, [r.model_dump() for r in a.references], a.facing)
+    return {**{k: v for k, v in res.items() if k != "picture"}, "_image": _img(res["picture"])}
+
+
+def _parts_build(svc: Services, a: PartsBuildArgs) -> dict[str, Any]:
+    from . import partsgen
+    return _parts_out(partsgen.build_model(svc, [r.model_dump() for r in a.references], a.plan, name=a.name, into=a.into))
+
+
+def _parts_adjust(svc: Services, a: PartsAdjustArgs) -> dict[str, Any]:
+    from . import partsgen
+    return _parts_out(partsgen.adjust_model(svc, a.model_id, a.set or None, a.add or None, a.remove or None, a.plan))
+
+
+TOOLS += [
+    Tool("sprite_parts_read", _d("What a character's sprites say before building it by parts: the side sprite (the profile) as a "
+                                 "pixel map with colour letters, the front and back maps, the widths they show row by row, and a "
+                                 "picture of the sprites with rulers.",
+                                 "Write the plan for model_from_parts from it: shapes are in the side sprite's columns and rows.",
+                                 "leer sprites, perfil, mapa de píxeles"),
+         PartsReadArgs, ann(read_only=True), _parts_read, timeout_s=60, capped=False),
+    Tool("model_from_parts", _d("Build a character from its game sprites part by part, with no language model: the side sprite is "
+                                "the exact profile and a plan says what each part is across the body (solid, fin, fan, pair, wings, "
+                                "decal, skip for the far wing or leg a side sprite only draws for looks). Seurat does the geometry, "
+                                "keeps the sprite's colours and compares the result with the front and back sprites.",
+                                "Without a plan: the whole profile as one rounded solid. The plan stays with the model.",
+                                "sprite a voxel por partes, personaje desde sprites, alas, plan de partes"),
+         PartsBuildArgs, ann(draft_safe=True), _parts_build, timeout_s=180, capped=False),
+    Tool("model_parts_adjust", _d("Change the plan of a model built by parts (a width, a wingspan, how the wings open, a part's "
+                                  "shapes or type, parts added or removed) and rebuild it; the previous voxels stay as a version.",
+                                  synonyms="ajustar partes, envergadura, ancho del cuerpo"),
+         PartsAdjustArgs, ann(), _parts_adjust, timeout_s=180, capped=False),
 ]
 
 TOOLS_BY_NAME = {t.name: t for t in TOOLS}

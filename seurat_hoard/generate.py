@@ -408,6 +408,10 @@ class Generator:
     # ------------------------------------------------------------------ one job
     def run(self, job: Job) -> VoxelModel:
         p = job.params
+        from . import partsgen
+        if partsgen.wants(self, job):
+            # a character from its sprites, part by part: the model decides the structure, Seurat the geometry
+            return partsgen.run(self, job)
         settings = self.svc.settings
         max_side = int(p.get("max_side") or settings["max_side"])
         colors = int(p.get("colors") or settings["colors"])

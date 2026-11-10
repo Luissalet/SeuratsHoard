@@ -432,3 +432,45 @@ def test_sprite_agent_keeps_the_best_version_and_can_continue(tmp_path):
         first = first[0]["text"] if isinstance(first, list) else first
         assert "CONTINUING" in first and "extrude_side" in first and any("se continúa" in l["text"] for l in st2["log"])
         assert c.get(f"/api/models/{st['model_id']}").json()["count"] == model["count"]   # the worse run did not stick
+
+
+class EditLink(FakeLink):
+    """An agent that runs, edits part of its program, makes a bad edit, reverts and stops."""
+
+    def chat(self, messages, images=None, **kw):
+        if messages[0]["content"].startswith("You are a voxel art director"):
+            return SimpleNamespace(text=json.dumps({"brief": "The sprite in 3D."}), model="deepseek-v4.1-flash")
+        self.calls.append({"messages": messages, "images": images or [], **kw})
+        n = len(self.calls)
+        code = "PALETTE = SPRITE_PALETTE\ndef build(g):\n    extrude_side(g, X//2-1, X//2+1)\n"
+        answers = [{"action": "run", "notes": "base", "code": code},
+                   {"action": "edit", "notes": "wider", "edits": [{"old": "X//2-1, X//2+1", "new": "X//2-4, X//2+4"}]},
+                   {"action": "edit", "notes": "typo", "edits": [{"old": "not in the program", "new": "x"}]},
+                   {"action": "edit", "notes": "worse", "edits": [{"old": "extrude_side(g, X//2-4, X//2+4)", "new": "box(g, 1, (0, 0, 0), (1, 1, 1))"}]},
+                   {"action": "revert", "notes": "back"},
+                   {"action": "done", "notes": "ok"}]
+        return SimpleNamespace(text=json.dumps(answers[min(n, 6) - 1]), model="deepseek-v4.1-flash")
+
+
+def test_agent_edits_parts_of_its_program_and_reverts(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from seurat_hoard.config import Config
+    from seurat_hoard.main import create_app
+    from seurat_hoard.services import Services
+
+    cfg = Config(data_dir=tmp_path / "data", port=5250, data_dir_configured=True, background=False)
+    link = EditLink()
+    svc = Services(cfg, link_factory=lambda: link)
+    with TestClient(create_app(cfg, services=svc), base_url="http://127.0.0.1:5250", client=("127.0.0.1", 50000)) as c:
+        side = c.post("/api/references?name=side", content=sprite_png(), headers={"Content-Type": "image/png"}).json()["id"]
+        job = c.post("/api/generate", json={"references": [{"id": side, "role": "side"}], "method": "agent", "steps": 8}).json()
+        st = c.get(f"/api/jobs/{job['job_id']}").json()
+        assert st["status"] == "done", st
+        text = lambda i: (lambda m: m[0]["text"] if isinstance(m, list) else m)(link.calls[i]["messages"][-1]["content"])
+        assert "X//2-4, X//2+4" in text(2) and "after your edits" in text(2)      # the edited program is shown back
+        assert "NOT applied" in text(3)
+        assert "Back to your best version" in text(5)
+        assert "edit" in link.calls[0]["messages"][0]["content"] and "revert" in link.calls[0]["messages"][0]["content"]
+        model = c.get(f"/api/models/{st['model_id']}").json()
+        assert "extrude_side" in model["source"]["program"] and "box(" not in model["source"]["program"]   # the best, not the bad edit

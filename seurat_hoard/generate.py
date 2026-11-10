@@ -194,9 +194,15 @@ AGENT_SYSTEM = CODE_SYSTEM.split("ANSWER: ONE JSON object")[0] + """YOU WORK IN 
   with the result (voxel count, colours) and a contact sheet, or with the error and the failing line.
 - {"action": "look", "view": "iso" | "iso_front_left" | "iso_back_left" | "iso_back_right" | "front" | "back" | "left" |
   "right" | "top", "notes": "what you want to check"}: a large picture of the current model from that side.
+- {"action": "edit", "notes": "what this changes", "edits": [{"old": "<exact text of the current program>", "new":
+  "<its replacement>"}, ...]}: change only those parts of the program of the last version that ran and run it (each
+  "old" must appear exactly once). Best for refining: change one or two parts at a time and keep what works.
+- {"action": "revert", "notes": "why"}: go back to your best version so far (its model and program) when the last
+  changes made things worse.
 - {"action": "done", "notes": "why it is finished"}: when the model is excellent.
 Run early (a first complete version), then look at it critically from several sides, fix what is wrong and refine the
-details, run again, and so on. Errors are normal: read the failing line and fix it. Every run is the whole program."""
+details with edits, run again, and so on. Errors are normal: read the failing line and fix it. A run is the whole
+program; an edit changes parts of it."""
 
 SPRITE_TARGET = """
 SPRITE TARGET (this overrides what is said above about pictures). The pictures marked FRONT, BACK and SIDE are the
@@ -959,7 +965,7 @@ class Generator:
             notes = str(data.get("notes") or "")[:600]
             # what the model said goes into the conversation (without the thinking); old pictures are dropped
             history.append({"role": "user", "content": self._content(user_text, user_images)})
-            history.append({"role": "assistant", "content": json.dumps({k: data.get(k) for k in ("action", "notes", "view") if data.get(k)}
+            history.append({"role": "assistant", "content": json.dumps({k: data.get(k) for k in ("action", "notes", "view", "edits") if data.get(k)}
                                                                        | ({"code": "<the program, shown in the next message>"} if data.get("code") else {}))})
             for msg in history[:-4]:
                 if isinstance(msg.get("content"), list):
@@ -983,21 +989,61 @@ class Generator:
                 user_text, user_images = (f"The LAST picture is the current model from {view}"
                                           + (" (the others are the references again)" if ref_images else "") + ". Next action?"), list(ref_images) + [img]
                 continue
-            code = data.get("code") if isinstance(data.get("code"), str) else ""
+            if action == "revert":
+                if best["grid"] is None:
+                    user_text, user_images = ("There is no best version to go back to" + ("" if sprites else " (only with a sprite "
+                                              "target)") + ". Next action?"), []
+                    continue
+                model.grid, model.palette = best["grid"].copy(), list(best["palette"])
+                model.source = {**(model.source or {}), "program": best["code"]}
+                last_code = best["code"]
+                matches = spritecam.match(model, sprites, fb_pitch, side_pitch)
+                job.say(f"{label}: vuelve a la mejor versión ({'la de partida' if best['step'] == 0 else 'paso ' + str(best['step'])}, "
+                        f"{best['score']:.2f})")
+                user_text = (f"Back to your best version (match {best['score']:.2f}); edits now apply to its program:\n```python\n"
+                             f"{last_code}\n```\n" + "\n".join(m.summary() + "\n" + spritecam.where(m, sprite_data, model.size) for m in matches)
+                             + "\nNext action?")
+                user_images = [png_bytes(spritecam.sheet(matches)), png_bytes(sheet(model, 1100))]
+                continue
+            edited = False
+            if action == "edit":
+                edits = data.get("edits") if isinstance(data.get("edits"), list) else []
+                code, problem = last_code, ""
+                if not last_code:
+                    problem = "there is no program yet: run a complete one first"
+                elif not edits:
+                    problem = "the edit had no edits"
+                for i, e in enumerate(edits if not problem else []):
+                    old = str((e or {}).get("old") or "") if isinstance(e, dict) else ""
+                    new = str((e or {}).get("new") or "") if isinstance(e, dict) else ""
+                    n = code.count(old) if old else 0
+                    if n != 1:
+                        problem = (f"edit {i + 1}: its old text appears {n} times in the program (it must appear exactly once; "
+                                   "copy it exactly, with enough lines around it)")
+                        break
+                    code = code.replace(old, new)
+                if problem:
+                    user_text, user_images = f"The edit was NOT applied: {problem}. Nothing changed. Next action?", []
+                    continue
+                edited, action = True, "run"
+            else:
+                code = data.get("code") if isinstance(data.get("code"), str) else ""
             if action != "run" or not code.strip():
                 user_text, user_images = ("Your answer had no valid action. Answer ONE JSON object with action run (and the complete "
-                                          "code), look (and a view) or done."), []
+                                          "code), edit (and edits), look (and a view), revert or done."), []
                 continue
             runs += 1
             self._save_answer(job, step, code, suffix=".py")
-            history[-1]["content"] = json.dumps({"action": "run", "notes": notes, "code": code})
+            if not edited:
+                history[-1]["content"] = json.dumps({"action": "run", "notes": notes, "code": code})
             try:
                 res = run_program(code, model.size, timeout=float(settings["program_timeout_s"]), sprites=sprite_data)
             except ProgramError as exc:
                 job.say(f"{label}: el programa falló ({exc.message[:160]})")
                 self._record(job, step, notes, {"applied": 0, "errors": [exc.message[:300]]}, model)
                 user_text, user_images = (f"The program FAILED: {exc.message}\n{exc.trace}\nFix it and run again (the model shown "
-                                          "before, if any, is unchanged)."), []
+                                          "before, if any, is unchanged" + ("; edits still apply to the program of the last version that ran"
+                                                                           if edited else "") + ")."), []
                 continue
             if res.count == 0:
                 job.say(f"{label}: el programa no puso ningún voxel")
@@ -1044,6 +1090,8 @@ class Generator:
                                   "and change less at a time.")
                 elif best["step"] == step:
                     user_text += "\nThis is your best version so far."
+            if edited:
+                user_text += "\nThe program after your edits (the next edits apply to it):\n```python\n" + code + "\n```"
         if not last_code and not model.count:
             raise SeuratError("failed", "The model never produced a working program.")
         if sprites and best["grid"] is not None and spritecam.mean_iou(spritecam.match(model, sprites, fb_pitch, side_pitch)) < best["score"] - 1e-6:

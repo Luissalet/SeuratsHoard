@@ -615,6 +615,25 @@ def _check_eye(p: Profile, plan: dict[str, Any], parts: list[dict[str, Any]], la
                      f"make sure that is the eye and that shape the head")
 
 
+def _check_stand(p: Profile, parts: list[dict[str, Any]], label: np.ndarray, notes: list[str]) -> None:
+    """What the figure stands on. A narrow foot at the very bottom that belongs to a part on the middle line becomes
+    ONE central leg; legs are a pair."""
+    h, w = p.shape
+    rows = np.nonzero(p.mask.any(axis=1))[0]
+    if not len(rows):
+        return
+    foot = p.mask & (np.arange(h)[:, None] >= rows.max() - 1)
+    cols = np.nonzero(foot.any(axis=0))[0]
+    if len(cols) > 0.35 * w:
+        return                                   # it lies on the ground (a snake, a fish, a slime): nothing to say
+    owners = np.bincount(label[foot], minlength=len(parts) + 1)[1:]
+    k = int(owners.argmax())
+    if parts[k]["type"] == "solid":              # a fan or a fin that hangs lowest is a tail, and fine
+        notes.append(f"the character stands on '{parts[k]['name']}' (columns {cols.min()}-{cols.max()} at the bottom rows), a part on the "
+                     f"middle line: that builds ONE leg in the middle. If those pixels are a leg or a foot, give them (the whole leg, "
+                     f"up to the body) to a pair part")
+
+
 def _check_skips(p: Profile, parts: list[dict[str, Any]], masks: list[np.ndarray], notes: list[str]) -> None:
     """A far copy has the colours of the near one. A skip part of colours that no wings or pair part has is more likely
     a marking of the body that would be lost: say so."""
@@ -773,13 +792,14 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
             label[mask] = len(parts)
             notes.append(f"'{parts[k]['name']}': the area at columns {cs.min()}-{cs.max()}, rows {rs.min()}-{rs.max()} ({len(rs)} px) has the "
                          f"same colours as the rest of it behind a line of its own: taken for the FAR one drawn behind the near one, "
-                         f"and not built (the mirrored near one is it). If it really belongs to the part, set \"far\": \"keep\" on '{parts[k]['name']}'.")
+                         f"and not built (the mirrored near one is it).")
     masks = [label == k + 1 for k in range(len(parts))]
     for k, part in enumerate(parts):
         part["pixels"] = int(masks[k].sum())
         if not part["pixels"]:
             notes.append(f"part '{part['name']}' got no pixels: check its shapes, cells and colours")
     _check_skips(p, parts, masks, notes)
+    _check_stand(p, parts, label, notes)
     lateral_px = np.zeros((h, w), bool)
     for k, part in enumerate(parts):
         if part["type"] in LATERAL:

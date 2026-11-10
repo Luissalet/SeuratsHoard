@@ -33,6 +33,8 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
   flat colours), places it on the sprite (box centres, then the best shift within 4 px) and returns silhouette IoU,
   missing/extra shares, colour difference (outline excluded) and the model's width/height relative to the sprite, plus
   a sheet (sprite, model, red/blue diff) the agent sees and the job keeps per round (`sprite_render`, `match`, `views`).
+  With each view it also gets the biggest missing/extra areas in numbers (`spritecam.where`: grid z/y for the side,
+  grid x and sprite rows for front/back).
   Models far from the sprite's size are scaled instead (`fit` auto/pixel/area). The side sprite is tried from both
   sides. `model_sprite_match` does the same for any model; `model_look` has views overworld_front/back/left/right
   (`render.camera`: orthographic from any yaw and pitch); `model_program` takes `sprites` for the same tools. The agent tracks its best

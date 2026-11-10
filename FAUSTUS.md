@@ -19,8 +19,9 @@ App id `seurat`, service `seurats-hoard`, port 5250, MCP stdio bridge `mcp_serve
 - Import Minecraft schematics (`.schem`, WorldEdit/Sponge v1-3): blocks become their texture colours (table + rules for
   the dyed families); a web page saved as .schem is recognised and explained.
 - Agent generations (default method `agent`): after the design brief the model works in a tool loop with the conversation
-  kept: actions `run` (complete program; answer = voxel count and a contact sheet, or the error and failing line), `look`
-  (large render from any side) and `done`; budgets `agent_steps` (16), `agent_minutes` (90) and `agent_step_thinking`
+  kept: actions `run` (complete program; answer = voxel count and a contact sheet, or the error and failing line), `edit`
+  (exact old/new replacements on the program of the last version that ran, then run; the edited program is shown
+  back), `revert` (back to the best version so far, sprite target), `look` (large render from any side) and `done`; budgets `agent_steps` (16), `agent_minutes` (90) and `agent_step_thinking`
   (30 000 per action). Each working run is saved; the program and brief stay in the source.
 - Sprite target (`target`: auto/sprite/free; auto = sprite when the front/back/side pictures are small pixel art): the
   sprites are the design to rebuild in 3D at one voxel per sprite pixel (`spritecam.grid_size`: X from the front/back

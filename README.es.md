@@ -12,7 +12,7 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
     frente y lado talladas en un bloque, coloreadas desde cada vista).
   - *Como agente* (por defecto): tras el brief de diseño, DeepSeek trabaja en bucle como un harness agéntico: ejecuta su
     programa voxel, recibe el resultado o el error con la línea que falla, mira el modelo desde cualquier lado, corrige y
-    refina, y dice cuándo ha terminado (acciones y minutos máximos en Ajustes). Cada ejecución que funciona se guarda.
+    refina (reescribiendo el programa o editando partes, y volviendo a su mejor versión si un cambio empeora), y dice cuándo ha terminado (acciones y minutos máximos en Ajustes). Cada ejecución que funciona se guarda.
   - *Sprites del juego como objetivo* (`target: sprite`, automático con pixel art pequeño): las imágenes frontal, trasera
     y lateral son sprites de overworld que hay que reconstruir en 3D como hacen los mods voxel (un voxel por píxel más o
     menos, los colores y el diseño del sprite). El sprite lateral es un perfil puro (sin ángulo de cámara): la vista más

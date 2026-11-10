@@ -10,7 +10,8 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
     picture on front and back, a gentle rounded thickness, the 2D outline kept off the sides), *inflate* (the front puffed up like a cushion), *extrude* (a slab) or *silhouette* (front +
     side views carved into a block, coloured from each view).
   - *As an agent* (default): after the design brief, DeepSeek works in a loop like an agent harness: it runs its voxel
-    program, gets the result or the error with the failing line, looks at the model from any side, fixes and refines,
+    program, gets the result or the error with the failing line, looks at the model from any side, fixes and refines
+    (rewriting the program or editing parts of it, and going back to its best version when a change makes it worse),
     and says when it is finished (step and time budgets in Settings). Every run that works is saved.
   - *Game sprites as the target* (`target: sprite`, automatic for small pixel art): the front, back and side pictures
     are overworld sprites to rebuild in 3D, the way voxel mods do it (about one voxel per sprite pixel, the sprite's own

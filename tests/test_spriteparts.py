@@ -45,7 +45,7 @@ def bird_back() -> np.ndarray:
     return np.asarray(img).copy()
 
 
-PLAN = {"facing": "right", "parts": [
+PLAN = {"facing": "right", "eye": [30, 9], "parts": [
     {"name": "body", "type": "solid", "where": [[10, 12, 27, 25]], "width": 12},
     {"name": "head", "type": "solid", "where": [[24, 5, 34, 15]]},
     {"name": "beak", "type": "solid", "where": [[34, 8, 41, 12]], "colors": ["#eba014"]},
@@ -247,6 +247,26 @@ def test_the_far_wing_inside_a_wing_is_left_out_by_itself():
     assert not [q for q in kept.parts if q.get("auto")]
     with pytest.raises(sp.PlanError):
         sp.normalise_plan({"parts": [dict(wing, far="maybe")]})
+
+
+def test_the_eye_settles_which_shape_is_the_head():
+    """A plan that calls a wing the head, or faces the wrong way, is refused with the reason."""
+    p = sp.read_profile(bird_side())
+    assert [q["name"] for q in sp.build(p, sp.normalise_plan(PLAN)).parts if q.get("eye") == "[30, 9]"] == ["eye"]
+    with pytest.raises(sp.PlanError, match="HEAD"):
+        sp.build(p, sp.normalise_plan(dict(PLAN, eye=[13, 9])))             # on the wing
+    with pytest.raises(sp.PlanError, match="back third"):
+        sp.build(p, sp.normalise_plan(dict(PLAN, eye=[12, 20])))            # on the body, at the tail end
+    with pytest.raises(sp.PlanError, match="not on the character"):
+        sp.build(p, sp.normalise_plan(dict(PLAN, eye=[40, 30])))
+    with pytest.raises(sp.PlanError):
+        sp.normalise_plan(dict(PLAN, eye="head"))
+    left = sp.read_profile(bird_side()[:, ::-1], "left")
+    flipped = dict(PLAN, facing="left", eye=[41 - 30, 9],
+                   parts=[dict(q, where=[[41 - s[2], s[1], 41 - s[0], s[3]] if isinstance(s, list) else
+                                         {"poly": [[41 - c, r] for c, r in s["poly"]]} for s in q["where"]],
+                               **({"root": [41 - q["root"][0], q["root"][1]]} if q.get("root") else {})) for q in PLAN["parts"]])
+    assert [q["name"] for q in sp.build(left, sp.normalise_plan(flipped)).parts if q.get("eye") == "[11, 9]"] == ["eye"]
 
 
 def test_overlapping_shapes_follow_the_patches_of_colour():

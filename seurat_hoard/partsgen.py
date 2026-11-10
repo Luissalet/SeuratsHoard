@@ -66,6 +66,8 @@ PART TYPES
   of type skip (whatever of the body lies under it is completed). Never build both copies as one big wing. How to spot
   it: a second shape with the near wing's colours right beside it, usually behind and a little higher, that leaves the
   body and ends in a point with nothing on it. It is NOT a neck: a neck is what joins the head to the body.
+  Seurat also looks for it inside every wings and pair part (a second area of the same colours behind a line of its
+  own) and leaves it out by itself; the report says so, and "far": "keep" on that part builds it after all.
 
 WHERE A PART IS. "where": a list of shapes in SIDE-sprite pixels, numbered as in the pixel map (column from the left,
 row from the top): a rectangle [col0, row0, col1, row1] (inclusive) or a polygon {"poly": [[col, row], ...]}. Add
@@ -98,7 +100,9 @@ character from every side in the lit views. Usual faults: wings too short or too
 (out_up / out_back), not touching the body (root), a body too thin or too fat (width), legs fused in the middle
 (offset), the far wing built as if it belonged to the near one or as a neck or a slab on the middle line (skip it:
 between the wings the back sprite has only the head and what is on it), a crest built as a ball, a part that took its
-neighbour's pixels, a tail fan built as a ball. Change a few things at a time with adjust and finish with done when it reads right."""
+neighbour's pixels, a tail fan built as a ball. Do NOT tune out_up / out_back to shave red or blue pixels off the wings: those sprites hold
+the wings in another pose than the side sprite, so wing silhouettes never match; change them only when the wings look
+wrong in the lit views (a thin line from the front, lying flat, pointing forwards). Change a few things at a time with adjust and finish with done when it reads right."""
 
 FIRST = """Rebuild this character in voxels from its sprites.
 {prompt}
@@ -323,6 +327,13 @@ def wants(gen: Any, job: Any) -> bool:
         return False
     refs = p.get("references") or []
     side = [r for r in refs if (r.get("role") or "front") == "side"]
+    sheets = [r for r in refs if r.get("role") == "sheet"]
+    if not side and sheets and hasattr(gen.svc, "expand_references"):
+        # a sprite sheet that shows the character from the side has its side sprite too
+        try:
+            return any(e["role"] == "side" for e in gen.svc.expand_references(sheets))
+        except Exception:  # noqa: BLE001
+            return False
     if not side:
         return False
     if p.get("target") == "sprite":

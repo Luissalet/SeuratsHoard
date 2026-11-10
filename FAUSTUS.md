@@ -39,7 +39,10 @@ images). Connector preset: its own `faustus-plugin.json`.
   0.6 of its half thickness; flat end), `pair` (`offset`, `width` or
   `thickness`, `lean`, `side` both/near/far), `wings` (flat sheets hinged at `root`: `out_up`, `out_back` (0.5 and 1 by default), `span`,
   `offset`, `thickness`), `decal` (exact pixels, shown only where the side cameras see), `skip` (not built; what lies
-  under it is completed from the median parts). Guarantees: every sprite pixel that is not skipped is a column of voxels,
+  under it is completed from the median parts). `far_copies`: inside a wings or pair part whose `far` is auto, a second
+  area of the main area's colour family behind a line of its own (at least 0.3 of its size; the main area is the one with
+  most pixels counting the other-coloured areas it carries) becomes a skip part named `<part> (far)`; the report says so
+  and `far: keep` builds it. Guarantees: every sprite pixel that is not skipped is a column of voxels,
   nothing outside the silhouette, left-right symmetric, the first voxel from each side shows the sprite's pixel. A `width` given to a solid or a fan is met exactly. `paint_faces`: a solid takes
   the front or back sprite's own pixels on the voxels that camera sees and whose surface looks more at it than sideways
   (`surface_normals`), when that sprite's silhouette overlaps the model's by `FACE_IOU` (0.82) or the part asks (`paint`:

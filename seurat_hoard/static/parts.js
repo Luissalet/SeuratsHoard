@@ -6,14 +6,17 @@ import { $, el, api, toast, fail } from './ui.js';
 const TYPES = [['solid', 'Sólido redondeado'], ['fin', 'Aleta fina'], ['fan', 'Abanico'], ['pair', 'Par (uno a cada lado)'],
   ['wings', 'Alas (dos láminas)'], ['decal', 'Marca en los flancos'], ['skip', 'No construir (la de detrás)']];
 const PAINT = [['auto', 'Automático'], ['none', 'Solo el sprite lateral'], ['front', 'Cara de frente'], ['back', 'Dorso'], ['both', 'Frente y dorso']];
+const FAR = [['auto', 'No construirla (automático)'], ['keep', 'Construirla']];
 const FIELDS = {
   solid: [['width', 'Ancho', 'voxels de lado a lado; vacío = tan ancho como grueso es de perfil', 2, 120, 1],
     ['paint', 'Caras', 'lo que mira a la cámara de frente o de espalda se pinta con ese sprite; automático = solo si ese sprite está en la misma pose que el modelo', PAINT]],
   fin: [['thickness', 'Grosor', 'voxels', 2, 12, 2]],
   fan: [['base', 'Ancho en la raíz', 'voxels', 2, 60, 1], ['width', 'Ancho al final', 'voxels', 2, 120, 1]],
-  pair: [['offset', 'Separación', 'del centro del cuerpo al centro de cada uno', 0, 60, 0.5], ['width', 'Grosor', 'de cada uno, de lado a lado', 1, 60, 1]],
+  pair: [['offset', 'Separación', 'del centro del cuerpo al centro de cada uno', 0, 60, 0.5], ['width', 'Grosor', 'de cada uno, de lado a lado', 1, 60, 1],
+    ['far', 'La de detrás', 'la extremidad lejana que el sprite lateral deja asomar detrás de la cercana: Seurat la busca y no la construye', FAR]],
   wings: [['span', 'Envergadura', 'de punta a punta, en voxels', 4, 124, 1], ['out_up', 'Se abre al subir', '1 = cuanto más alto, más fuera (alas en V)', -2, 3, 0.1],
-    ['out_back', 'Se abre hacia atrás', '1 = cuanto más atrás, más fuera (alas echadas atrás)', -2, 3, 0.1], ['thickness', 'Grosor', 'voxels', 2, 6, 1]],
+    ['out_back', 'Se abre hacia atrás', '1 = cuanto más atrás, más fuera (alas echadas atrás)', -2, 3, 0.1], ['thickness', 'Grosor', 'voxels', 2, 6, 1],
+    ['far', 'El ala de detrás', 'el ala lejana que el sprite lateral deja asomar detrás de la cercana: Seurat la busca y no la construye', FAR]],
   decal: [], skip: [],
 };
 

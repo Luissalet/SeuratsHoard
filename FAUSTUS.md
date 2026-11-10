@@ -51,9 +51,14 @@ images). Connector preset: its own `faustus-plugin.json`.
   the figure, in a wings, fan, fin or skip part, or in the back third for its `facing` raises `PlanError` (the model reads
   the sprite again); a note warns when nothing around it looks like an eye. Other notes in the report: a skip part of colours no wings or
   pair part has (`_check_skips`), a narrow foot at the bottom rows owned by a solid (`_check_stand`). Nothing floats: voxels of a pair or wings part that
-  cannot be reached from the solids through touching voxels (`_floating`, 26 neighbours) are joined to the middle plane at
-  the pixels where the part meets the body in the profile (`joined`; a note when the bar is longer than 3 voxels, which
-  means the shape misses pixels), and what still floats is said (`_check_floating`). Plans written by the model cannot
+  cannot be reached from the solids through touching voxels (`_floating`, 26 neighbours) are moved towards the middle plane,
+  each side as a block, until they touch the body or something that hangs from it (`settled`: how many voxels in; no bar and no
+  note), and what still floats is said (`_check_floating`). A wings part with no `offset` starts where it meets the body in the
+  profile, not out where the body is widest at its root. A sheet whose opening Seurat chose opens the way it is drawn from its
+  root: downwards when it hangs below it (`hangs`), towards the front when it lies ahead of it (`forward`). A part made of lines
+  only takes the colours beside it, and a piece of a part cut off from its colours takes the part's main colour (never the ink).
+  What the plan's author reads back (the parts picture, `root`, the columns in the notes) uses the sprite's own columns also when
+  the sprite faces left (the profile is kept facing right inside). Plans written by the model cannot
   force `paint` either. Plans written by the
   model never keep the far copy (`partsgen._drop_keep`); a person can, in the panel or with the tools. Carrying on (`partsgen._base_model`): `continue_from` (or `into` with
   start `current`) on a model whose source is a parts plan builds that plan as step 0 and opens the loop with the sprites
@@ -66,9 +71,28 @@ images). Connector preset: its own `faustus-plugin.json`.
   nothing outside the silhouette, left-right symmetric, the first voxel from each side shows the sprite's pixel. A `width` given to a solid or a fan is met exactly. `paint_faces`: a solid takes
   the front or back sprite's own pixels on the voxels that camera sees and whose surface looks more at it than sideways
   (`surface_normals`), when that sprite's silhouette overlaps the model's by `FACE_IOU` (0.82) or the part asks (`paint`:
-  auto, none, front, back, both); lines are toned down, small dark spots (pupils) kept.
-  Colours: the outline on the figure's edge takes its part's colour (`outline`: drop/keep/shade), inner ink is toned
-  down (`ink`: soften/keep/drop), exposed voxels show the sprite's pixel and inner ones the part's own colour (also
+  auto, none, front, back, both); when the whole figure does not, each solid is tried on its own (`_band_pose`: over the
+  rows the part takes from that camera the two silhouettes must overlap by `FACE_IOU` at a placement within 2 pixels of the
+  whole figure's, which is then the part's own placement); small dark spots (pupils) kept.
+  Parts placed in the other sprites (plan keys `front`, `back`: shapes in that sprite's own columns and rows; written by
+  hand, the generation prompt does not ask for them): `read_view` reads that sprite like the side one, snaps the shapes to
+  its patches (a patch mostly inside the shapes is the part's whole, a pixel away from every shape is nobody's) and keeps,
+  per part and per row, how far from the sprite's symmetry axis it reaches (`View.inner`, `View.outer`, in voxels to each
+  side). `build(..., sprites=)` uses the front view of a part, or the back one (`across`): a solid is as deep as the side
+  sprite draws it and as wide as that view draws it at every height (its rows laid over the part's rows in the profile,
+  an ellipse across each run of the row; `width` given by hand keeps the round puffed form), a pair stands as far from the
+  middle and is as thick as its two copies there, a fin stays a thin slab and gets a second thin blade across it as wide as
+  that view draws it, a fan takes its end width, and wings are laid out from their own drawing (`planform`: those sprites
+  are drawn from above, so the part's pixels there are the wing's outline and markings; each pixel becomes voxels at its
+  distance from the axis, along the body at one profile column per `scale` rows of the drawing with the drawing's inner end
+  at `root`, lifted from the root row by `rise` at the tips: the height the side sprite raises the wing, negative when it
+  hangs below its root; the grid grows along the body when the wing runs past the profile; its pixels in the profile build
+  nothing, it keeps the drawing's colours and `tune_wings` leaves it alone). `paint_views` paints what each such solid or
+  pair shows straight on to the front and back from its own place in that sprite (rows over rows, columns to each side of
+  the middle plane); `paint_faces` is for parts with no place there. `reading_picture` shows every sprite next to its
+  pixels by part, `sides_picture` each sprite next to the model from that side.
+  Colours: the outline on the figure's edge takes its part's colour (`outline`: drop/keep/shade), inner ink follows `ink` (clean by default: a line of the drawing takes its part's colour and a small dark feature, an ink
+  patch of up to 6 pixels off the outline, stays; soften, keep, drop), exposed voxels show the sprite's pixel and inner ones the part's own colour (also
   under what hides it). The game camera is oblique (`project`: heights kept, depth shifts the picture by `depth` pixels
   per voxel); `tune_camera` finds the depth of the front and back sprites; `compare` gives the silhouette overlap and a
   match that only counts pixels of the same colour family; `paint_caps` lays the back (or front) sprite's picture of a

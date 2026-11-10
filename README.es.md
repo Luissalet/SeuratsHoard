@@ -17,22 +17,28 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
     perfil exacto del modelo (cada píxel es una columna de voxels) y un plan dice qué es cada parte a lo ancho del cuerpo:
     `solid` (sólido redondeado en el plano medio: cuerpo, cabeza, cola gruesa), `fin` (aleta fina), `fan` (abanico que se
     ensancha, redondeado hacia sus bordes; su extremo se pinta desde el sprite trasero), `pair` (par simétrico: patas, brazos, orejas), `wings` (dos
-    láminas planas que salen del cuerpo, con envergadura; cómo se abren lo busca Seurat probando entre recto hacia arriba
-    y recto hacia atrás (sin llegar a ninguno de los dos) y quedándose con lo que mejor encaja con los sprites de frente y espalda), `decal` (marca solo en los flancos:
+    láminas planas que salen del cuerpo, con envergadura: alas, y también aletas que salen a los lados; cómo se abren lo busca Seurat probando entre recto hacia arriba
+    y recto hacia atrás (sin llegar a ninguno de los dos) y quedándose con lo que mejor encaja con los sprites de frente y espalda; una lámina que cuelga por debajo de su raíz, como una aleta, se abre hacia abajo, y empieza donde toca el cuerpo), `decal` (marca solo en los flancos:
     ojos) y `skip` (lo que el sprite lateral enseña solo por estética, como el ala de detrás asomando: no se construye,
     la cercana reflejada ya es la otra; dentro de unas alas o de un par Seurat la busca sola, otra zona de los mismos
     colores tras una línea propia, y `far: keep` la conserva). El plan dice dónde está el ojo (`eye`):
     la forma que lo lleva es la cabeza, y Seurat rechaza un plan que lo ponga en un ala o en el extremo contrario al que
-    mira el personaje, une al cuerpo las alas y patas que quedarían flotando a su lado, y avisa cuando una parte «no construir» tiene colores que ningún ala o par tiene (una marca del
+    mira el personaje, acerca al cuerpo hasta tocarlo las alas, patas y cintas que quedarían flotando a su lado (sin barras de unión), y avisa cuando una parte «no construir» tiene colores que ningún ala o par tiene (una marca del
     cuerpo que se perdería) o cuando la figura queda de pie sobre una sola pata central. DeepSeek decide esa estructura y lee los anchos en los sprites de frente y
-    espalda; la geometría, los colores (el contorno negro desaparece y las líneas interiores se suavizan) y la
-    comparación son de Seurat. Cuando el sprite de frente o el de espalda enseñan la misma pose que el modelo (personajes
-    de pie, chibis), lo que mira a esa cámara se pinta con ese sprite: la cara de frente, el pelo o el dorso por detrás;
+    espalda; la geometría, los colores (las líneas del dibujo no se construyen: el contorno desaparece y cada línea interior toma el
+    color de su parte; un punto oscuro pequeño, como una pupila, se conserva) y la comparación son de Seurat. Cuando el sprite de frente o el de espalda enseñan la misma pose que el modelo (personajes
+    de pie, chibis), lo que mira a esa cámara se pinta con ese sprite: la cara de frente, el pelo o el dorso por detrás; se decide parte por parte, así que una cabeza toma su cara aunque los brazos del sprite estén en otra pose;
     los flancos siguen siendo el sprite lateral (`paint` en cada sólido: `auto`, `none`, `front`, `back`, `both`). Tras cada plan le enseña qué píxeles cogió cada parte, cada sprite junto al modelo desde
     su cámara (oblicua: las alturas se conservan y la profundidad desplaza; cuánto, se busca solo para cada sprite) y el
     modelo con luz desde varios lados, y el modelo ajusta (`adjust`) o rehace el plan. Las formas del plan son
     aproximadas (rectángulos o polígonos en columnas y filas del sprite, con filtro de colores): se ajustan a las manchas
-    de color y a las líneas del sprite. El plan se guarda con el modelo: el panel *Partes del personaje* cambia anchos,
+    de color y a las líneas del sprite. Un plan escrito a mano (herramientas o «Editar el plan») puede decir además dónde está cada parte en el sprite de frente
+    y en el de espalda (`front`, `back`, en las columnas y filas de ese sprite): esa parte se construye entonces a lo
+    ancho como la dibuja ese sprite (un sólido tan ancho a cada altura, un par tan separado, una cresta como dos
+    láminas en cruz, unas alas con el contorno que les da, tendido a cada lado y con las puntas levantadas lo que el
+    lateral levanta el ala) y se pinta con su propio dibujo en él, esté el resto de la figura en la pose que esté. La
+    generación con DeepSeek todavía no lo pide: en las pruebas leyó bien los tres sprites, pero el resultado salió peor
+    que con el perfil y los anchos. El plan se guarda con el modelo: el panel *Partes del personaje* cambia anchos,
     envergadura, apertura de las alas, separación de las patas o el tipo de cada parte y reconstruye, y también deja
     editar el plan entero. Con «Pedir el cambio» (o `continue_from` y un texto) DeepSeek sigue desde ese plan con lo que
     se le pida en palabras («alas más abiertas», «esa mancha azul es la panza»), con los sprites del propio modelo; en el

@@ -17,21 +17,28 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
     model's exact profile (every pixel is a column of voxels) and a plan says what each part is across the body: `solid`
     (a rounded solid on the middle plane: body, head, thick tail), `fin` (a thin slab), `fan` (widens away from its root,
     rounded towards its edges; its end is painted from the back sprite), `pair` (legs, arms, ears: one on each side), `wings` (two flat sheets that
-    leave the body, with a span; how they open is found by Seurat, trying between straight up and straight back (short of both) and keeping
-    what matches the front and back sprites best), `decal` (a marking only on the flanks: eyes) and `skip` (what the side
+    leave the body, with a span: wings, and flippers that stick out to the sides too; how they open is found by Seurat, trying between straight up and straight back (short of both) and keeping
+    what matches the front and back sprites best; a sheet that hangs below its root, like a flipper, opens downwards, and it starts where it meets the body), `decal` (a marking only on the flanks: eyes) and `skip` (what the side
     sprite shows only for looks, like the far wing peeking out: not built, the mirrored near one already is it; inside wings or a pair
     Seurat finds it by itself, a second area of the same colours behind a line of its own, and `far: keep` keeps it). The plan says where the eye is
     (`eye`): the shape that carries it is the head, and Seurat refuses a plan that puts it on a wing or at the end
-    opposite to where the character faces, joins to the body the wings and legs that would float beside it, and warns when a `skip` part has colours no wing or pair has (a body
+    opposite to where the character faces, brings in the wings, legs and streamers that would float beside the body until they touch it (no joining bars), and warns when a `skip` part has colours no wing or pair has (a body
     marking that would be lost) or when the figure ends up standing on one leg in the middle. DeepSeek
-    decides that structure and reads the widths off the front and back sprites; the geometry, the colours (the black
-    outline goes, inner lines are toned down) and the comparison are Seurat's. When the front or the back sprite shows the same pose as the model (standing characters,
-    chibis), what faces that camera is painted from it: the face from the front, the hair or the back from behind; the
+    decides that structure and reads the widths off the front and back sprites; the geometry, the colours (the lines of the
+    drawing are not built: the outline goes and every inner line takes its part's colour; a small dark spot such as a pupil
+    stays) and the comparison are Seurat's. When the front or the back sprite shows the same pose as the model (standing characters,
+    chibis), what faces that camera is painted from it: the face from the front, the hair or the back from behind (decided part by part, so a head takes its face even when the sprite holds its arms in another pose); the
     flanks stay the side sprite (`paint` on each solid: `auto`, `none`, `front`, `back`, `both`). After every plan it shows the model which
     pixels each part caught, each sprite next to the model from its camera (oblique: heights are kept and depth shifts;
     how much is found for each sprite) and the model lit from several sides, and the model adjusts or rewrites the plan.
     Shapes are rough (rectangles or polygons in the sprite's columns and rows, with a colour filter): they snap to the
-    sprite's patches of colour and its lines. The plan stays with the model: the *Partes del personaje* panel changes
+    sprite's patches of colour and its lines. A plan written by hand (the tools or *Editar el plan*) can also say where each part is in the front and in the back
+    sprite (`front`, `back`, in that sprite's columns and rows): the part is then built across the body as that sprite
+    draws it (a solid as wide at every height, a pair as far apart, a crest as two crossed blades, wings with the
+    outline it gives them, laid out to each side with their tips raised as high as the side sprite raises the wing)
+    and painted from its own drawing there, whatever pose the rest of the figure holds. The generation with DeepSeek
+    does not ask for it yet: in the trials it read the three sprites well, but the result came out worse than with the
+    profile and the widths. The plan stays with the model: the *Partes del personaje* panel changes
     widths, wingspan, how the wings open, how far apart the legs are or what each part is, and rebuilds; the whole plan
     can be edited there too. With *Pedir el cambio* (or `continue_from` and a text) DeepSeek carries on from that plan with
     what is asked in words ("open the wings more", "that blue patch is the belly"), using the model's own sprites; in

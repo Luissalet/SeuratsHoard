@@ -667,6 +667,7 @@ def far_copies(p: Profile, label: np.ndarray, parts: list[dict[str, Any]]) -> li
     with the small areas and lines that hang only from it."""
     out: list[tuple[int, np.ndarray]] = []
     cls = None
+    skipped = np.isin(label, [j + 1 for j, q in enumerate(parts) if q["type"] == "skip"])
     for k, part in enumerate(parts):
         if part["type"] not in ("wings", "pair") or str(part.get("far") or "auto") != "auto":
             continue
@@ -695,6 +696,11 @@ def far_copies(p: Profile, label: np.ndarray, parts: list[dict[str, Any]]) -> li
         score = {i: sizes[i] + sum(sizes[j] for j in range(1, n + 1) if touch[i, j] and dom[j] != dom[i]) for i in big}
         main = max(big, key=lambda i: (score[i], sizes[i]))
         cands = [i for i in big if i != main and dom[i] == dom[main] and sizes[i] >= max(12, 0.3 * sizes[main])]
+        if skipped.any():
+            # what a rough shape left of a far copy the plan already skips: same colours, cut off by a line, and
+            # touching what was skipped
+            cands += [i for i in range(1, n + 1) if i != main and i not in cands and dom[i] == dom[main] and sizes[i] >= 4
+                      and (near[i] & skipped).any()]
         if not cands:
             continue
         kept, far = {main}, set(cands)

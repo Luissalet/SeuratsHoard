@@ -137,6 +137,28 @@ You have up to {steps} actions and about {minutes} minutes. Think the anatomy th
 which shape is the head; which pixels are the body, each limb; which limb is the far copy drawn for looks; how wide each part is in the front and back sprites;
 how the wings leave the body. Then answer a first complete plan with action build."""
 
+CHECK = """You check how a game sprite was read before it is built in 3D. Someone cut the SIDE sprite of a character into
+named parts. Your pictures: (1) the character's sprites enlarged with rulers (side, front, back); (2) the side sprite
+and, beside it, the same pixels coloured by part with each part's name{extra}.
+Go part by part and say whether its name fits what those pixels really are.
+- Start with the head: it is the shape that carries the eye (and the beak, mouth or snout), at the end the character
+  faces. Colours agree between sprites: what the front sprite has at its top centre is the head.
+- Then the tail (the opposite end), the wings or arms (they rise from the back or the shoulders), the legs (what the
+  character stands on) and the markings of the body (a belly patch is not a foot, a crest is not a wing).
+- A second wing or limb with the near one's colours peeking out behind it is the FAR copy, drawn for looks. It must be
+  left out (a part of type skip, or the grey part Seurat labels "(far)"): never a neck, a head or a piece of the near
+  wing. And a part of type skip must really be such a far copy, not a marking of the body.
+The list you get gives, for every part, the columns and rows it covers in the side sprite (read them on the rulers:
+do not go by where a label happens to be drawn) and its main colours.
+Answer ONE JSON object:
+{{"head": "name of the part that really is the head", "wrong": [{{"part": "its name", "really": "what those pixels are",
+"why": "in a few words", "sure": true}}], "missing": ["something the character has that no part covers"],
+"verdict": "ok" or "redo"}}
+"redo" only when the reading is wrong at its root (the head, where it faces, a wing taken for the body). "sure": false
+when you only suspect it. A part may take a few pixels of its neighbour or be cut a little short: that is not a fault,
+and neither is a missing part for something small. When the reading is right answer empty lists and "ok": do not
+invent faults, and do not judge sizes or the 3D, only what each part is."""
+
 CONTINUE = """
 
 THIS CHARACTER IS ALREADY BUILT: you are continuing it, not starting over. Its report and plan are below, and the
@@ -338,6 +360,73 @@ def _union_palette(profile: sp.Profile, sprites: dict[str, np.ndarray]) -> tuple
 
 
 # ---------------------------------------------------------------------------------------------- the generation
+def _colour_word(rgb: tuple[int, int, int]) -> str:
+    import colorsys
+    h, sat, v = colorsys.rgb_to_hsv(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)
+    if v < 0.22:
+        return "black"
+    if sat < 0.16:
+        return "white" if v > 0.82 else "grey"
+    for limit, word in ((18, "red"), (42, "orange"), (68, "yellow"), (165, "green"), (200, "cyan"), (262, "blue"), (300, "purple"), (340, "pink")):
+        if h * 360 < limit:
+            return ("dark " if v < 0.5 else "") + word
+    return ("dark " if v < 0.5 else "") + "red"
+
+
+def second_opinion(client: Any, pictures: list[bytes], plan: dict[str, Any], built: sp.Built, profile: sp.Profile, *, prompt: str = "", artwork: bool = False,
+                   effort: str = "max", thinking: int = 8000, timeout: float = 1800, cancel: Any = None) -> tuple[dict[str, Any], str]:
+    """A fresh look at the reading of the sprite: the model, without the reasoning that made the plan, checks the parts
+    picture name by name. Returns (its answer, what to tell the author of the plan; '' when it could not be read)."""
+    parts = []
+    for k, part in enumerate(built.parts):
+        if not part.get("pixels") or built.label is None:
+            continue
+        mine = built.label == k + 1
+        rs, cs = np.nonzero(mine)
+        if not len(rs):
+            continue
+        words: dict[str, int] = {}
+        for px in profile.rgba[mine & ~profile.ink][:, :3]:
+            word = _colour_word((int(px[0]), int(px[1]), int(px[2])))
+            words[word] = words.get(word, 0) + 1
+        main = [w for w, n in sorted(words.items(), key=lambda kv: -kv[1]) if n >= 0.08 * max(1, sum(words.values()))][:3]
+        if profile.flipped:
+            cs = profile.shape[1] - 1 - cs
+        parts.append(f"- {part['name']} ({part['type']}): columns {cs.min()}-{cs.max()}, rows {rs.min()}-{rs.max()}, {len(rs)} px"
+                     + (", " + " and ".join(main) if main else ""))
+    text = ((f"The character: {prompt.strip()}\n" if prompt.strip() else "")
+            + f"The plan says it faces {plan.get('facing', 'right')}" + (f" and that its eye is at column {plan['eye'][0]:.0f}, row {plan['eye'][1]:.0f}"
+                                                                         if plan.get("eye") else "") + ".\nThe parts:\n" + "\n".join(parts))
+    try:
+        answer = client.chat(CHECK.format(extra="; (3) artwork of the character, to know its anatomy" if artwork else ""), text, pictures,
+                             max_tokens=3000, effort=effort, timeout=timeout, cancel=cancel, thinking_tokens=thinking)
+        data = parse_json(answer.text)
+    except Exception as exc:  # noqa: BLE001 - the check is a help, never a reason to fail
+        log.warning("parts check not read: %s: %s", type(exc).__name__, str(exc)[:300])
+        return {}, ""
+    if not isinstance(data, dict):
+        return {}, ""
+    computed = {str(part["name"]) for part in built.parts if part.get("auto")}       # what Seurat left out itself is not the author's to fix
+    wrong = [w for w in (data.get("wrong") or []) if isinstance(w, dict) and w.get("part") and w.get("sure", True) is not False
+             and str(w["part"]) not in computed]
+    data["wrong"] = wrong
+    missing = [str(m) for m in (data.get("missing") or []) if m]
+    if not wrong and not missing and str(data.get("verdict") or "ok").lower() != "redo":
+        return data, "\nAn independent check of the parts picture found the reading right (head: %s)." % (data.get("head") or "?")
+    lines = ["\nAN INDEPENDENT CHECK of the parts picture, by someone who has not seen your reasoning, says:"]
+    if data.get("head"):
+        lines.append(f"- the head is the part named '{data['head']}'")
+    for w in wrong[:8]:
+        lines.append(f"- '{w['part']}' is really {str(w.get('really') or '?')[:120]}" + (f" ({str(w['why'])[:160]})" if w.get("why") else ""))
+    for m in missing[:6]:
+        lines.append(f"- nothing covers: {m[:160]}")
+    if str(data.get("verdict") or "").lower() == "redo":
+        lines.append("- its verdict: the reading is wrong at its root, write the plan again")
+    lines.append("Look at those pixels again before anything else. Fix what it is right about; if you are sure it is mistaken "
+                 "somewhere, say why in your notes.")
+    return data, "\n".join(lines)
+
+
 def _base_model(svc: Any, p: dict[str, Any]) -> Optional[VoxelModel]:
     """The model a generation carries on from, when it was built by parts: ``continue_from``, or the model it writes
     into when the start is the current model."""
@@ -672,6 +761,24 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
                                  views="front right, back left, front, back, side and top")
         if len(plans) > 1:
             user_text += "\nBuilt steps you can revert to: " + ", ".join(str(n) for n in sorted(plans) if n != step) + "."
+        if (0 not in plans and setting("parts_check", True)
+                and (state.get("checks", 0) == 0 or (state.get("checks") == 1 and state.get("check_faults")))):
+            # the first plan that builds gets a second opinion on how it read the sprite, before sizes are tuned; if it
+            # found faults, so does the plan that answers them
+            state["checks"] = state.get("checks", 0) + 1
+            job.say(f"{label}: comprobación independiente de la lectura del sprite")
+            opinion, told = second_opinion(client, [board, state["pics"][0]] + extra_imgs[:1], state["plan"], built, state["profile"],
+                                           prompt=str(p.get("prompt") or ""), artwork=bool(extra_imgs), effort=effort,
+                                           thinking=max(4000, step_thinking // 4), timeout=timeout, cancel=job.cancel)
+            if told:
+                user_text += told
+                faults = (len([w for w in (opinion.get("wrong") or []) if isinstance(w, dict) and w.get("sure", True) is not False])
+                          + len(opinion.get("missing") or []) + (1 if str(opinion.get("verdict")).lower() == "redo" else 0))
+                state["check_faults"] = faults
+                job.say(f"{label}: la comprobación " + ("da la lectura por buena" if not faults
+                                                         else f"señala {faults} cosa(s)" + (" y pide rehacer el plan" if str(opinion.get("verdict")).lower() == "redo" else "")))
+                if job.rounds:
+                    job.rounds[-1]["check"] = {k: opinion.get(k) for k in ("head", "wrong", "missing", "verdict")}
         if kept_far:
             user_text += ('\n"far": "keep" was ignored on ' + ", ".join(kept_far) + ": the far wing or limb a side sprite lets peek out "
                           "is drawn for looks and is not built here. If that area is really something else, give it its own part.")

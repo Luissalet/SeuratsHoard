@@ -35,7 +35,9 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
     envergadura, apertura de las alas, separación de las patas o el tipo de cada parte y reconstruye, y también deja
     editar el plan entero. Con «Pedir el cambio» (o `continue_from` y un texto) DeepSeek sigue desde ese plan con lo que
     se le pida en palabras («alas más abiertas», «esa mancha azul es la panza»), con los sprites del propio modelo; en el
-    bucle puede volver al plan de un paso anterior (`revert`).
+    bucle puede volver al plan de un paso anterior (`revert`). El primer plan que se construye pasa una comprobación
+    independiente: el modelo, sin el razonamiento que lo escribió, mira el reparto de píxeles y dice si cada nombre es lo
+    que esos píxeles son (la cabeza, un ala tomada por cuello, una panza tomada por pie); lo que encuentra vuelve al bucle.
   - *Sprites del juego como objetivo* (`target: sprite`, automático con pixel art pequeño): las imágenes frontal, trasera
     y lateral son sprites de overworld que hay que reconstruir en 3D como hacen los mods voxel (un voxel por píxel más o
     menos, los colores y el diseño del sprite). El sprite lateral es un perfil puro (sin ángulo de cámara): la vista más

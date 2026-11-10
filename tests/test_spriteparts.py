@@ -212,6 +212,7 @@ class PartsLink:
 
     def __init__(self):
         self.calls = []
+        self.checks = []
         self.answers = None
         self.sync = SimpleNamespace(chat=self.chat, resolve=self.resolve)
 
@@ -220,6 +221,12 @@ class PartsLink:
                                provider="test", api="link", reason="test")
 
     def chat(self, messages, images=None, **kw):
+        if "You check how a game sprite was read" in str(messages[0]["content"]):
+            # the second opinion on the first plan that builds: a call of its own, outside the conversation
+            self.checks.append({"messages": messages, "images": images or []})
+            wrong = [{"part": "legs", "really": "the tail feathers", "why": "test"}, {"part": "body", "really": "a wing", "sure": False}]
+            return SimpleNamespace(text=json.dumps({"head": "head", "wrong": wrong if len(self.checks) == 1 else [], "missing": [],
+                                                    "verdict": "ok"}), model="deepseek-v4.1-flash")
         self.calls.append({"messages": messages, "images": images or [], **kw})
         n = len(self.calls)
         answers = self.answers or [{"action": "build", "notes": "wrong type", "plan": {"parts": [{"name": "b", "type": "tentacle"}]}},
@@ -368,6 +375,15 @@ def test_generation_by_parts_and_its_tools(tmp_path):
         third = link.calls[2]["messages"][-1]["content"]
         third = third[0]["text"] if isinstance(third, list) else third
         assert "wings (wings)" in third and "silhouettes overlap" in third and "far wing (skip)" in third
+        assert "INDEPENDENT CHECK" in third and "'legs' is really the tail feathers" in third and "a wing" not in third
+        # the first plan that builds is checked, and so is the plan that answers the faults found; no more
+        assert len(link.checks) == 2 and len(link.checks[0]["images"]) == 2      # the sprites and the parts picture, nothing else
+        check_text = link.checks[0]["messages"][-1]["content"]
+        check_text = check_text[0]["text"] if isinstance(check_text, list) else check_text
+        assert "- wings (wings): columns" in check_text and "faces right" in check_text and len(link.checks[0]["messages"]) == 2
+        fifth = link.calls[4]["messages"][-1]["content"]
+        fifth = fifth[0]["text"] if isinstance(fifth, list) else fifth
+        assert "found the reading right" in fifth
         assert len(link.calls[2]["images"]) == 3                              # parts, sprite comparison, lit views
         fourth = link.calls[3]["messages"][-1]["content"]
         fourth = fourth[0]["text"] if isinstance(fourth, list) else fourth
@@ -395,6 +411,7 @@ def test_generation_by_parts_and_its_tools(tmp_path):
         assert "width 18" in texts[1] and "revert to: 0" in texts[1]
         assert "Step 2." in texts[2] and "width 18" not in texts[2]
         assert "no built step 7" in texts[3]
+        assert len(link.checks) == 2                                          # a model that carries on is not read again
         again = c.get(f"/api/models/{st['model_id']}").json()
         assert again["source"]["plan"]["parts"][0]["width"] == src["plan"]["parts"][0]["width"] and again["count"] == model["count"]
         assert len(c.get(f"/api/models/{st['model_id']}/versions").json()["versions"]) >= 1

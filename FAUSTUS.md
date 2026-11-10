@@ -43,7 +43,8 @@ images). Connector preset: its own `faustus-plugin.json`.
   `offset`, `thickness`), `decal` (exact pixels, shown only where the side cameras see), `skip` (not built; what lies
   under it is completed from the median parts). `far_copies`: inside a wings or pair part whose `far` is auto, a second
   area of the main area's colour family behind a line of its own (at least 0.3 of its size; the main area is the one with
-  most pixels counting the other-coloured areas it carries) becomes a skip part named `<part> (far)`; the report says so
+  most pixels counting the other-coloured areas it carries) becomes a skip part named `<part> (far)` (so does a smaller such area that touches a skip part of the plan: what its
+  rough shape left of the far copy); the report says so
   and `far: keep` builds it. Plan key `eye` ([column, row] of the side sprite, `_check_eye`): a plan whose eye lies off
   the figure, in a wings, fan, fin or skip part, or in the back third for its `facing` raises `PlanError` (the model reads
   the sprite again); a note warns when nothing around it looks like an eye. Other notes in the report: a skip part of colours no wings or

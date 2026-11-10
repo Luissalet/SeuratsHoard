@@ -230,6 +230,62 @@ class PartsLink:
         return SimpleNamespace(text=json.dumps(answers[min(n, len(answers)) - 1]), model="deepseek-v4.1-flash")
 
 
+def test_overlapping_shapes_follow_the_patches_of_colour():
+    """Rectangles written by a model overlap. A patch stays with the part that has the rest of it, and a shape lying
+    inside another one wins there whatever the order."""
+    img = Image.new("RGBA", (20, 10), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, 19, 9], fill=RED + (255,), outline=INK + (255,))
+    d.rectangle([10, 1, 18, 8], fill=GOLD + (255,))
+    p = sp.read_profile(np.asarray(img).copy())
+    red = np.all(p.rgba[..., :3] == RED, axis=2)
+    gold = np.all(p.rgba[..., :3] == GOLD, axis=2)
+    borders = sp.normalise_plan({"parts": [{"name": "a", "type": "solid", "where": [[0, 0, 12, 9]]},
+                                           {"name": "b", "type": "solid", "where": [[7, 0, 19, 9]]}]})
+    label = sp.assign(p, borders)
+    assert (label[red] == 1).all() and (label[gold] == 2).all()
+    nested = sp.normalise_plan({"parts": [{"name": "spot", "type": "solid", "where": [[10, 1, 18, 8]]},
+                                          {"name": "all", "type": "solid", "where": [[0, 0, 19, 9]]}]})
+    label = sp.assign(p, nested)
+    assert (label[gold] == 1).all() and (label[red] == 2).all()
+    assert (label[p.mask] > 0).all()
+
+
+def test_a_face_comes_from_the_front_sprite_when_it_shows_the_same_pose():
+    """A round head: the side sprite colours its flanks, the front sprite what looks at the front camera; a front
+    sprite in another pose leaves it alone unless the part asks."""
+    side = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+    ImageDraw.Draw(side).ellipse([0, 0, 15, 15], fill=RED + (255,), outline=INK + (255,))
+    front = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+    d = ImageDraw.Draw(front)
+    d.ellipse([0, 0, 15, 15], fill=RED + (255,), outline=INK + (255,))
+    d.rectangle([5, 6, 6, 7], fill=WHITE + (255,))
+    d.rectangle([9, 6, 10, 7], fill=WHITE + (255,))
+    sprites = {"side": np.asarray(side).copy(), "front": np.asarray(front).copy()}
+    plan = {"parts": [{"name": "head", "type": "solid", "where": [[0, 0, 15, 15]], "width": 16}]}
+    white = "#%02x%02x%02x" % WHITE
+
+    def painted(plan, sprites):
+        built = sp.build(sp.read_profile(sprites["side"]), sp.normalise_plan(plan))
+        sp.paint_caps(built, sprites, {"front": 0.0})
+        where = np.argwhere(built.grid == built.palette.index(white) + 1) if white in built.palette else np.zeros((0, 3), int)
+        return built, where
+
+    built, eyes = painted(plan, sprites)
+    assert len(eyes) >= 6 and built.parts[0]["faces"] == "front"
+    assert eyes[:, 2].min() > built.grid.shape[2] / 2                      # on the front half only
+    side_view = sp.project(built.grid, sp.palette_rgb(built.palette), "side", 0.0)
+    assert (side_view[..., 3] >= 128).sum() == (sprites["side"][..., 3] >= 128).sum()
+    _, none = painted({"parts": [dict(plan["parts"][0], paint="none")]}, sprites)
+    assert len(none) == 0
+    other = np.zeros((16, 30, 4), np.uint8)                                # the front sprite of something else entirely
+    other[2:14, 1:29] = WHITE + (255,)
+    _, off = painted(plan, {"side": sprites["side"], "front": other})
+    assert len(off) == 0
+    with pytest.raises(sp.PlanError):
+        sp.normalise_plan({"parts": [dict(plan["parts"][0], paint="everything")]})
+
+
 def test_generation_by_parts_and_its_tools(tmp_path):
     from fastapi.testclient import TestClient
 

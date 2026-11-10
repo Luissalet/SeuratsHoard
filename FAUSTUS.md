@@ -30,14 +30,20 @@ images). Connector preset: its own `faustus-plugin.json`.
   `static/parts.js`). The side sprite is read into a profile: ink colours (dark and found on the figure's edge far
   more than their share), cells (patches of one colour between lines). A plan `{"facing", "parts": [...]}` gives each
   part a `type` and rough shapes in side-sprite columns and rows (`where`: rectangles, polygons, per-shape or per-part
-  `colors` as map letters or hex; `cells`; `except`): a cell mostly inside a part's shapes goes to it whole (the last
-  such part wins), otherwise it is split along the shapes; lines and leftovers join their neighbours. Types: `solid`
+  `colors` as map letters or hex; `cells`; `except`): a cell that is one part's but for a sliver (60% its own and no
+  other part taking more than 12% or 6 pixels) goes to it whole, a cell several parts really share is split along the
+  shapes. Where shapes overlap, one lying mostly inside another wins there (a wing over a body drawn as one rectangle);
+  shapes that overlap only at their borders leave each cell with the part that has the rest of it (later part if both); lines and leftovers join their neighbours. Types: `solid`
   (all solids are puffed up as one volume with circular sections scaled by `aspect` or to `width`, blended across joins),
-  `fin` (`thickness`), `fan` (`base`, `width` or `spread`, `root`, `towards`; flat end), `pair` (`offset`, `width` or
-  `thickness`, `lean`, `side` both/near/far), `wings` (flat sheets hinged at `root`: `out_up`, `out_back`, `span`,
+  `fin` (`thickness`), `fan` (`base`, `width` or `spread`, `root`, `towards`, `rim`: rounded towards its upper and lower edges, by default over
+  0.6 of its half thickness; flat end), `pair` (`offset`, `width` or
+  `thickness`, `lean`, `side` both/near/far), `wings` (flat sheets hinged at `root`: `out_up`, `out_back` (0.5 and 1 by default), `span`,
   `offset`, `thickness`), `decal` (exact pixels, shown only where the side cameras see), `skip` (not built; what lies
   under it is completed from the median parts). Guarantees: every sprite pixel that is not skipped is a column of voxels,
-  nothing outside the silhouette, left-right symmetric, the first voxel from each side shows the sprite's pixel.
+  nothing outside the silhouette, left-right symmetric, the first voxel from each side shows the sprite's pixel. A `width` given to a solid or a fan is met exactly. `paint_faces`: a solid takes
+  the front or back sprite's own pixels on the voxels that camera sees and whose surface looks more at it than sideways
+  (`surface_normals`), when that sprite's silhouette overlaps the model's by `FACE_IOU` (0.82) or the part asks (`paint`:
+  auto, none, front, back, both); lines are toned down, small dark spots (pupils) kept.
   Colours: the outline on the figure's edge takes its part's colour (`outline`: drop/keep/shade), inner ink is toned
   down (`ink`: soften/keep/drop), exposed voxels show the sprite's pixel and inner ones the part's own colour (also
   under what hides it). The game camera is oblique (`project`: heights kept, depth shifts the picture by `depth` pixels

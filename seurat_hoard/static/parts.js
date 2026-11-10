@@ -5,8 +5,10 @@ import { $, el, api, toast, fail } from './ui.js';
 
 const TYPES = [['solid', 'Sólido redondeado'], ['fin', 'Aleta fina'], ['fan', 'Abanico'], ['pair', 'Par (uno a cada lado)'],
   ['wings', 'Alas (dos láminas)'], ['decal', 'Marca en los flancos'], ['skip', 'No construir (la de detrás)']];
+const PAINT = [['auto', 'Automático'], ['none', 'Solo el sprite lateral'], ['front', 'Cara de frente'], ['back', 'Dorso'], ['both', 'Frente y dorso']];
 const FIELDS = {
-  solid: [['width', 'Ancho', 'voxels de lado a lado; vacío = tan ancho como grueso es de perfil', 2, 120, 1]],
+  solid: [['width', 'Ancho', 'voxels de lado a lado; vacío = tan ancho como grueso es de perfil', 2, 120, 1],
+    ['paint', 'Caras', 'lo que mira a la cámara de frente o de espalda se pinta con ese sprite; automático = solo si ese sprite está en la misma pose que el modelo', PAINT]],
   fin: [['thickness', 'Grosor', 'voxels', 2, 12, 2]],
   fan: [['base', 'Ancho en la raíz', 'voxels', 2, 60, 1], ['width', 'Ancho al final', 'voxels', 2, 120, 1]],
   pair: [['offset', 'Separación', 'del centro del cuerpo al centro de cada uno', 0, 60, 0.5], ['width', 'Grosor', 'de cada uno, de lado a lado', 1, 60, 1]],
@@ -31,7 +33,7 @@ export function initParts(context) {
     .part-head b { font-size: 13px; }
     .part-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
     .part-fields label { display: grid; gap: 2px; font-size: 11px; opacity: .9; }
-    .part-fields input, .part-head select { width: 100%; min-width: 0; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line, #3a3640);
+    .part-fields input, .part-fields select, .part-head select { width: 100%; min-width: 0; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line, #3a3640);
       background: rgba(0,0,0,.25); color: inherit; font: inherit; font-size: 12px; }
     .part-head select { width: auto; max-width: 60%; }
     .parts-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -60,8 +62,10 @@ function render(report) {
     const fields = el('div', { class: 'part-fields' });
     const fill = () => {
       fields.replaceChildren(...(FIELDS[type.value] || []).map(([key, label, hint, min, max, step]) =>
-        el('label', { title: hint }, label,
-          el('input', { type: 'number', min, max, step, 'data-part': part.name, 'data-key': key, placeholder: 'auto',
+        el('label', { title: hint }, label, Array.isArray(min)
+          ? el('select', { 'data-part': part.name, 'data-key': key },
+            ...min.map(([v, t]) => el('option', { value: v, text: t, selected: v === (part[key] || min[0][0]) })))
+          : el('input', { type: 'number', min, max, step, 'data-part': part.name, 'data-key': key, placeholder: 'auto',
             value: part[key] === null || part[key] === undefined ? '' : part[key] }))));
     };
     type.addEventListener('change', fill);
@@ -98,8 +102,9 @@ async function apply(area) {
       if (!part) continue;
       const key = input.dataset.key;
       let value = input.value;
-      if (key !== 'type') value = value === '' ? null : Number(value);
-      const before = part[key] === undefined ? null : part[key];
+      const choice = input.tagName === 'SELECT';
+      if (!choice) value = value === '' ? null : Number(value);
+      const before = part[key] === undefined ? (choice && key !== 'type' ? input.options[0].value : null) : part[key];
       if (value !== before && !(value === null && before === null)) (set[part.name] = set[part.name] || {})[key] = value;
     }
     if (!Object.keys(set).length) { toast('No hay cambios que aplicar.', 'ok'); return; }

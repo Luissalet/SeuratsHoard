@@ -8,4 +8,5 @@
 - Partes: proponer solas las alas, las patas y los abanicos sin modelo de lenguaje, comparando hipótesis contra los
   sprites de frente y espalda.
 - Partes: alas y aletas curvadas o plegadas (hoy son láminas planas) y extremidades lejanas con pose propia.
-- Partes: llevar los dibujos de frente y espalda a más partes que los abanicos (cara de frente, dorso).
+- Partes: pintar de frente y de espalda también cuando ese sprite está en otra pose que el lateral, deformando su dibujo
+  parte a parte.

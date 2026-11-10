@@ -16,12 +16,14 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
   - *Personajes por partes* (`method: parts`; es lo que se usa solo cuando hay un sprite lateral): el sprite lateral es el
     perfil exacto del modelo (cada píxel es una columna de voxels) y un plan dice qué es cada parte a lo ancho del cuerpo:
     `solid` (sólido redondeado en el plano medio: cuerpo, cabeza, cola gruesa), `fin` (aleta fina), `fan` (abanico que se
-    ensancha; su extremo se pinta desde el sprite trasero), `pair` (par simétrico: patas, brazos, orejas), `wings` (dos
+    ensancha, redondeado hacia sus bordes; su extremo se pinta desde el sprite trasero), `pair` (par simétrico: patas, brazos, orejas), `wings` (dos
     láminas planas que salen del cuerpo, con envergadura y dirección de apertura), `decal` (marca solo en los flancos:
     ojos) y `skip` (lo que el sprite lateral enseña solo por estética, como el ala de detrás asomando: no se construye,
     la cercana reflejada ya es la otra). DeepSeek decide esa estructura y lee los anchos en los sprites de frente y
     espalda; la geometría, los colores (el contorno negro desaparece y las líneas interiores se suavizan) y la
-    comparación son de Seurat. Tras cada plan le enseña qué píxeles cogió cada parte, cada sprite junto al modelo desde
+    comparación son de Seurat. Cuando el sprite de frente o el de espalda enseñan la misma pose que el modelo (personajes
+    de pie, chibis), lo que mira a esa cámara se pinta con ese sprite: la cara de frente, el pelo o el dorso por detrás;
+    los flancos siguen siendo el sprite lateral (`paint` en cada sólido: `auto`, `none`, `front`, `back`, `both`). Tras cada plan le enseña qué píxeles cogió cada parte, cada sprite junto al modelo desde
     su cámara (oblicua: las alturas se conservan y la profundidad desplaza; cuánto, se busca solo para cada sprite) y el
     modelo con luz desde varios lados, y el modelo ajusta (`adjust`) o rehace el plan. Las formas del plan son
     aproximadas (rectángulos o polígonos en columnas y filas del sprite, con filtro de colores): se ajustan a las manchas

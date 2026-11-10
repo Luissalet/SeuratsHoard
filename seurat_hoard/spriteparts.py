@@ -316,12 +316,15 @@ def colour_map(p: Profile) -> str:
 
 
 # ---------------------------------------------------------------------------------------------- the plan
+PAINTS = ("auto", "none", "front", "back", "both")
+FACE_IOU = 0.82       # a front or back sprite this close to the model's own silhouette is a picture of the same pose
+
 DEFAULTS: dict[str, dict[str, Any]] = {
-    "solid": {"aspect": 1.0, "width": None},
+    "solid": {"aspect": 1.0, "width": None, "paint": "auto"},
     "fin": {"thickness": 2},
-    "fan": {"base": None, "spread": 0.5, "width": None, "root": None, "towards": None, "rim": 1.0, "paint": "auto"},
+    "fan": {"base": None, "spread": 0.5, "width": None, "root": None, "towards": None, "rim": None, "paint": "auto"},
     "pair": {"offset": None, "aspect": 1.0, "width": None, "thickness": None, "lean": 0.0, "root": None, "side": "both"},
-    "wings": {"offset": None, "out_up": 0.6, "out_back": 0.0, "span": None, "thickness": 2, "root": None, "side": "both", "curl": 0.0},
+    "wings": {"offset": None, "out_up": 0.5, "out_back": 1.0, "span": None, "thickness": 2, "root": None, "side": "both", "curl": 0.0},
     "decal": {"side": "both"},
     "skip": {},
 }
@@ -362,6 +365,8 @@ def normalise_plan(plan: dict[str, Any]) -> dict[str, Any]:
                     raise PlanError(f"part '{name}': {key} must be [column, row] of the side sprite") from None
             elif key == "paint":
                 val = str(val or "auto").lower()
+                if val not in PAINTS:
+                    raise PlanError(f"part '{name}': paint must be one of {', '.join(PAINTS)}")
             elif key == "side":
                 val = str(val or "both").lower()
                 if val not in ("both", "near", "far"):
@@ -449,8 +454,10 @@ def assign(p: Profile, plan: dict[str, Any]) -> np.ndarray:
     """(h, w) part number per pixel (1-based, 0 empty): every pixel of the sprite ends in exactly one part.
 
     A part takes the cells it names (``cells``: keys or ids) and the pixels inside its shapes (``where``), optionally
-    only of some colours (``colors``). Shapes are rough: a cell that is mostly inside one part's shape goes to it
-    whole (colour changes and lines are the real borders); a cell shared by several shapes is split along them. A
+    only of some colours (``colors``). Shapes are rough: a cell that is one part's but for a sliver goes to it whole
+    (colour changes and lines are the real borders); a cell that several shapes really share is split along them. Where
+    shapes overlap, the one lying mostly inside the other wins; shapes that overlap only at their borders leave each
+    cell with the part that has the rest of it. A
     decal is the exception: it is exactly the pixels of its shapes. What nobody asks for joins the neighbouring part
     (or the first solid)."""
     h, w = p.shape
@@ -478,36 +485,52 @@ def assign(p: Profile, plan: dict[str, Any]) -> np.ndarray:
             want[k] &= ~em
     core = p.cell_core
     normal = [k for k, part in enumerate(parts) if part["type"] != "decal"]
+    # Shapes are rough and overlap. A shape that lies mostly inside another one is the more specific of the two and
+    # wins there (a wing drawn over a body given as one big rectangle); shapes that only overlap at their borders
+    # contest those pixels, and each patch of colour settles it.
+    area = {k: int(want[k].sum()) for k in normal}
+    inside = {(k, j) for k in normal for j in normal
+              if k != j and area[k] and int((want[k] & want[j]).sum()) >= 0.5 * area[k]
+              and (area[k] < area[j] or (area[k] == area[j] and k > j))}
+    owner = np.zeros((h, w), np.int32)            # part + 1 where one part has the pixel, -1 where several contest it
+    claims = want[normal].sum(axis=0) if normal else np.zeros((h, w), np.int32)
+    for k in normal:
+        owner[want[k] & (claims == 1)] = k + 1
+    for r, c in zip(*np.nonzero(claims > 1)):
+        who = [k for k in normal if want[k, r, c]]
+        who = [k for k in who if not any((j, k) in inside for j in who)] or who
+        owner[r, c] = who[0] + 1 if len(who) == 1 else -1
     for i in range(1, ncell + 1):
         cm = core == i
         n = int(cm.sum())
         if not n:
             continue
-        frac = np.zeros(len(parts))
-        for k in normal:
-            frac[k] = float((want[k] & cm).sum()) / n
-        if not frac.any():
+        piece = np.where(cm, owner, 0)
+        if not piece.any():
             continue
-        # the last part whose shapes hold most of the cell takes it whole (a wing listed after a body drawn as one big
-        # rectangle wins its patches)
-        mostly = [k for k in normal if frac[k] >= 0.6]
-        if mostly:
-            label[cm] = mostly[-1] + 1
+        sure = np.bincount(piece[piece > 0], minlength=len(parts) + 1)[1:]
+        big = max(6, 0.12 * n)
+        for r, c in zip(*np.nonzero(piece == -1)):
+            who = [k for k in normal if want[k, r, c]]
+            who = [k for k in who if not any((j, k) in inside for j in who)] or who
+            holders = [k for k in who if sure[k] >= big]
+            # the part that has the rest of the patch keeps this bit too; a patch they really share (or neither
+            # has) is cut along the shapes, the later one on top
+            piece[r, c] = (holders[0] if len(holders) == 1 else who[-1]) + 1
+        counts = np.bincount(piece[cm], minlength=len(parts) + 1)[1:]
+        top = int(counts.argmax())
+        others = np.delete(counts, top)
+        if counts[top] >= 0.6 * n and (not len(others) or others.max() <= big):
+            # a patch that is one part's but for a sliver goes to it whole
+            label[cm] = top + 1
         else:
-            # shared by several shapes: split along them (later parts win where shapes overlap), the rest of the
-            # cell goes to the nearest piece
-            piece = np.zeros((h, w), np.int32)
-            for k in normal:
-                piece[want[k] & cm] = k + 1
+            # a patch that really spans several parts (a wing and a body of the same colour): split along the shapes,
+            # what no shape takes goes to the nearest piece
             piece = grow_labels(piece, cm)
             label[cm] = piece[cm]
     # lines: inside one part's shape they are that part's; otherwise they join what is next to them
-    for k in normal:
-        only = want[k] & p.ink & (label == 0)
-        for j in normal:
-            if j != k:
-                only &= ~want[j]
-        label[only] = k + 1
+    only = p.ink & (label == 0) & (owner > 0)
+    label[only] = owner[only]
     label = grow_labels(label, p.mask)
     if (p.mask & (label == 0)).any():
         first_solid = next((k for k, part in enumerate(parts) if part["type"] == "solid"), 0)
@@ -650,7 +673,11 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
             acc = np.where(solid_union, acc / np.maximum(wsum2, 1e-9), 0)
             wsum = solid_union.astype(np.float64)
         for k in solid_ids:
-            half[k] = np.where(full[k], np.maximum(1.0, acc * base), 0)
+            hk = np.where(full[k], acc * base, 0)
+            if parts[k].get("width") and float(hk.max()) > 0.5:
+                # the blend with thinner or fatter neighbours moved the part off the width asked for: bring it back
+                hk = hk * (float(parts[k]["width"]) / 2.0) / float(hk.max())
+            half[k] = np.where(full[k], np.maximum(1.0, hk), 0)
             parts[k]["width_built"] = int(2 * round(float(half[k].max())))
     body_half = half[solid_ids].max(axis=0) if solid_ids else np.zeros((h, w))
 
@@ -694,9 +721,13 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
                 part["spread_used"] = round(spread, 3)
             lin = float(base_w) / 2.0 + spread * s
             dd = edt_inside(m)
-            rim = max(0.5, float(part.get("rim") or 2.0))
+            # rounded towards its upper and lower edges, so that its end is a fan and not a crate
+            rim = max(0.5, float(part.get("rim") or 0.6 * float(dd.max())))
             rho = np.sqrt(np.clip(1 - (1 - np.minimum(1.0, (dd + 0.5) / rim)) ** 2, 0, 1))
-            half[k] = np.where(m, np.maximum(1.0, lin * rho), 0)
+            hk = lin * rho
+            if part.get("width") and float(hk[m].max()) > 0.5:
+                hk = hk * (float(part["width"]) / 2.0) / float(hk[m].max())
+            half[k] = np.where(m, np.maximum(1.0, hk), 0)
             part["root_used"], part["base_used"] = [round(float(root[0]), 1), round(float(root[1]), 1)], round(float(base_w), 1)
             part["width_built"] = int(2 * round(float(half[k].max())))
         elif kind == "pair":
@@ -1198,6 +1229,107 @@ def paint_caps(built: Built, sprites: dict[str, np.ndarray], depths: dict[str, f
                 grid[x, y, z] = new
                 changed += 1
         part["painted"] = role
+    return changed + paint_faces(built, sprites, depths, fam, side_seen)
+
+
+def surface_normals(occ: np.ndarray, reach: int = 2) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Which way the surface looks at each voxel (x, y, z parts, not normalised): away from where the neighbouring
+    voxels are, over ``reach`` voxels around."""
+    f = np.pad(occ.astype(np.float32), reach)
+    X, Y, Z = occ.shape
+    out = [np.zeros(occ.shape, np.float32) for _ in range(3)]
+    for dx in range(-reach, reach + 1):
+        for dy in range(-reach, reach + 1):
+            for dz in range(-reach, reach + 1):
+                if not (dx or dy or dz):
+                    continue
+                near = f[reach + dx:reach + dx + X, reach + dy:reach + dy + Y, reach + dz:reach + dz + Z]
+                out[0] -= dx * near
+                out[1] -= dy * near
+                out[2] -= dz * near
+    return out[0], out[1], out[2]
+
+
+def paint_faces(built: Built, sprites: dict[str, np.ndarray], depths: dict[str, float], fam: Families,
+                side_seen: Optional[np.ndarray] = None) -> int:
+    """The side sprite colours a solid all around, which is right for its flanks and wrong for what faces the front
+    camera (a face) or the back one (the hair, a back pattern). Where the front or back sprite shows the same pose as
+    the model (their silhouettes overlap at least ``FACE_IOU``), or the part asks for it, the voxels that camera sees
+    and that look more at it than sideways take the sprite's own pixel. Lines are toned down as on the flanks; a small dark spot
+    inside (a pupil, a nostril) is kept. Returns how many voxels changed."""
+    if built.pid is None:
+        return 0
+    grid, pid = built.grid, built.pid
+    solids = {k + 1: str(part.get("paint") or "auto") for k, part in enumerate(built.parts) if part["type"] == "solid"}
+    if not solids or all(v == "none" for v in solids.values()):
+        return 0
+    changed = 0
+    nx, _, nz = surface_normals(grid > 0)
+    for role in ("front", "back"):
+        sprite = sprites.get(role)
+        if sprite is None:
+            continue
+        # what looks more at this camera than at the side ones: the flanks stay the side sprite's
+        facing = (nz if role == "front" else -nz) > np.abs(nx)
+        img, index = project(grid, palette_rgb(built.palette), role, float(depths.get(role, 0.5)), with_index=True)
+        res = compare(img, sprite, fam)
+        same_pose = res["iou"] >= FACE_IOU
+        wanted = {k for k, v in solids.items() if v in (role, "both") or (v == "auto" and same_pose)}
+        if not wanted:
+            continue
+        ox, oy = res["shift"]
+        th, tw = sprite.shape[:2]
+        opaque = sprite[..., 3] >= 128
+        inks = {tuple(c) for c in ink_colours(sprite)}
+        ink = opaque & np.array([[tuple(int(v) for v in px[:3]) in inks for px in row] for row in sprite])
+        # the outline and the lines that hang from it are drawing; ink that touches neither is a feature of its own
+        rim = opaque & ~(np.pad(opaque, 1)[:-2, 1:-1] & np.pad(opaque, 1)[2:, 1:-1] & np.pad(opaque, 1)[1:-1, :-2] & np.pad(opaque, 1)[1:-1, 2:])
+        lab, n = components(ink, conn8=True)
+        lines = np.zeros(n + 1, bool)
+        lines[np.unique(lab[rim & ink])] = True
+        sizes = np.bincount(lab.ravel(), minlength=n + 1)
+        lines |= sizes > 6
+        lines[0] = False
+        scls = fam.classify(sprite)
+        pal_cls = fam.classify(np.concatenate([palette_rgb(built.palette)[1:len(built.palette) + 1],
+                                               np.full((len(built.palette), 1), 255, np.uint8)], axis=1)[None])[0]
+        fams: dict[int, set] = {}
+        rs, cs = np.nonzero(index[..., 0] >= 0)
+        done: dict[int, int] = {}
+        for r, c in zip(rs, cs):
+            x, y, z = (int(v) for v in index[r, c])
+            k = int(pid[x, y, z])
+            if k not in wanted or not facing[x, y, z]:
+                continue
+            sr, sc = r + oy, c + ox
+            if not (0 <= sr < th and 0 <= sc < tw) or not opaque[sr, sc]:
+                continue
+            cur = int(grid[x, y, z])
+            if ink[sr, sc] and lines[lab[sr, sc]]:
+                if rim[sr, sc]:
+                    continue                                   # the outline is not a colour of the character
+                br, bg, bb = _rgb(built.palette[cur - 1])
+                hexc = "#%02x%02x%02x" % (int(br * 0.62), int(bg * 0.62), min(255, int(bb * 0.66)))
+            else:
+                if not same_pose:
+                    # asked for on a sprite in another pose: only colours this part has, so no wing lands on the chest
+                    if k not in fams:
+                        fams[k] = {int(pal_cls[i - 1]) for i in np.unique(grid[pid == k]) if i > 0} - {Families.INK}
+                    if int(scls[sr, sc]) not in fams[k] and int(scls[sr, sc]) != Families.INK:
+                        continue
+                hexc = _hex(sprite[sr, sc])
+            if hexc not in built.palette:
+                if len(built.palette) >= 255:
+                    continue
+                built.palette.append(hexc)
+            new = built.palette.index(hexc) + 1
+            if new != cur:
+                grid[x, y, z] = new
+                changed += 1
+                done[k] = done.get(k, 0) + 1
+        for k, n_px in done.items():
+            part = built.parts[k - 1]
+            part["faces"] = (part.get("faces", "") + " " + role).strip()
     return changed
 
 
@@ -1498,7 +1630,8 @@ def report(built: Built) -> str:
         bits = [f"{part['pixels']} px"]
         for key, text in (("width_built", "width"), ("span_built", "span"), ("offset_used", "offset"), ("root_used", "root"),
                           ("out_up_used", "out_up"), ("out_back_used", "out_back"), ("base_used", "base"), ("thickness", "thickness"),
-                          ("on", "on"), ("painted", "end painted from the sprite")):
+                          ("on", "on"), ("painted", "end painted from the sprite"),
+                          ("faces", "face painted from the sprite:")):
             if part.get(key) is not None:
                 bits.append(f"{text} {part[key]}")
         if part["type"] == "wings" and part.get("out_up_used") is None:

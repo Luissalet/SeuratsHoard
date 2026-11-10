@@ -179,7 +179,7 @@ function setSaveState(s, text) {
 }
 
 function markDirty() {
-  if (!state.model) return;
+  if (!state.model || state.model.preview) return;      // a round's preview is not saved until it becomes a model
   state.editSeq++;
   setSaveState('pending', 'Sin guardar');
   clearTimeout(state.saveTimer);
@@ -220,6 +220,7 @@ async function saveNow() {
 }
 
 async function flushSave() {
+  if (state.model && state.model.preview) return;
   if (state.model && state.editSeq !== state.savedSeq) await saveNow();
   else if (state.saving) await state.saving.catch(() => {});
 }
@@ -237,8 +238,53 @@ function renderModelSelect() {
   if (state.model) sel.value = state.model.id;
 }
 
+// ---------------------------------------------------------------- a generation's round in the editor (not a model yet)
+async function openPreview(jobId, round, label) {
+  await flushSave();
+  const m = await api(`/api/jobs/${jobId}/rounds/${round}/model`);
+  const back = state.model && !state.model.preview ? state.model.id : (state.model && state.model.back);
+  state.model = { id: '', preview: { job: jobId, round }, back, name: m.name, size: m.size, count: m.count };
+  state.editSeq = state.savedSeq = 0;
+  clearTimeout(state.saveTimer);
+  editor.load({ ...m, id: `preview:${jobId}:${round}` });
+  renderPalette();
+  setupSlicer();
+  updateStatus();
+  $('model-select').value = '';
+  $('preview-text').textContent = `${label || `Ronda ${round}`} · vista previa (sin guardar)`;
+  $('preview-bar').hidden = false;
+  setSaveState('saved', 'Vista previa');
+  document.title = `${m.name} · Seurat's Hoard`;
+  return m;
+}
+
+function closePreviewBar() { $('preview-bar').hidden = true; }
+
+$('preview-save').addEventListener('click', async () => {
+  const p = state.model && state.model.preview;
+  if (!p) return;
+  try {
+    const res = await api(`/api/jobs/${p.job}/rounds/${p.round}/save`, { method: 'POST', body: {} });
+    closePreviewBar();
+    await refreshModels();
+    await openModel(res.id, { keepCamera: true });
+    toast(`Guardada como «${res.name}». Ya puedes editarla.`, 'ok');
+  } catch (err) { fail(err); }
+});
+
+$('preview-close').addEventListener('click', async () => {
+  const back = state.model && state.model.back;
+  closePreviewBar();
+  try {
+    const list = state.models.length ? state.models : await refreshModels();
+    const target = list.find((x) => x.id === back) ? back : (list[0] && list[0].id);
+    if (target) await openModel(target);
+  } catch (err) { fail(err); }
+});
+
 async function openModel(id, { keepCamera = false, quiet = false } = {}) {
   if (state.model && state.model.id !== id) await flushSave();
+  closePreviewBar();
   const m = await api(`/api/models/${id}`);
   state.model = { id: m.id, name: m.name, size: m.size, source: m.source, count: m.count, updated: m.updated };
   state.editSeq = state.savedSeq = 0;
@@ -310,7 +356,7 @@ $('btn-new').addEventListener('click', async () => {
 });
 
 $('btn-dup').addEventListener('click', async () => {
-  if (!state.model) return;
+  if (!state.model || state.model.preview) { if (state.model) toast('Es una vista previa: guárdala como modelo primero.', 'err'); return; }
   try {
     await flushSave();
     const m = await api(`/api/models/${state.model.id}/duplicate`, { method: 'POST' });
@@ -321,7 +367,7 @@ $('btn-dup').addEventListener('click', async () => {
 });
 
 $('btn-rename').addEventListener('click', async () => {
-  if (!state.model) return;
+  if (!state.model || state.model.preview) { if (state.model) toast('Es una vista previa: guárdala como modelo primero.', 'err'); return; }
   const name = await askText('Renombrar', 'Nombre del modelo', state.model.name, 'Renombrar');
   if (!name || name === state.model.name) return;
   try {
@@ -335,7 +381,7 @@ $('btn-rename').addEventListener('click', async () => {
 });
 
 $('btn-delete').addEventListener('click', async () => {
-  if (!state.model) return;
+  if (!state.model || state.model.preview) { if (state.model) toast('Es una vista previa: guárdala como modelo primero.', 'err'); return; }
   const ok = await confirmBox('Borrar modelo', `«${state.model.name}» irá a la papelera de datos (data/trash). ¿Seguro?`, 'Borrar', true);
   if (!ok) return;
   try {
@@ -352,7 +398,7 @@ $('btn-delete').addEventListener('click', async () => {
 });
 
 $('btn-versions').addEventListener('click', async () => {
-  if (!state.model) return;
+  if (!state.model || state.model.preview) { if (state.model) toast('Es una vista previa: guárdala como modelo primero.', 'err'); return; }
   try {
     await flushSave();
     const { versions } = await api(`/api/models/${state.model.id}/versions`);
@@ -453,7 +499,7 @@ async function start() {
   buildToolbar();
   await loadStatus();
   initPanels({
-    bus, editor, state, openModel, refreshModels, flushSave, loadStatus,
+    bus, editor, state, openModel, openPreview, refreshModels, flushSave, loadStatus,
     current: () => state.model,
     settings: () => state.settings,
     setSettings: (s) => { state.settings = s; },

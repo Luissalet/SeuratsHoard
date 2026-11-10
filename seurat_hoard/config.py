@@ -33,6 +33,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "program_timeout_s": 180, # time limit for one voxel program
     "sprite_pitch": 45,      # sprite target: degrees above the horizon of the camera that drew the front/back sprites
     "sprite_side_pitch": 0,  # ... and of the side sprites (0: a true profile, the most reliable view)
+    "sprite_calibrate": True,  # sprite target: find each sprite's camera from the model's silhouette after the runs
+    "review_render": "lit",  # the 3-D views of the review sheets: lit (shadows, ambient occlusion) or flat (isometric)
+    "scene_steps": 6,        # scenes by parts: agent actions per object
+    "scene_objects": 10,     # scenes by parts: at most this many objects in the plan
+    "scene_size": [128, 64, 128],  # scenes by parts: the scene grid when the call gives none (each side up to 256)
     "paint_sides": False,    # also paint the side picture on both sides (side sprites rarely match the sculpted side)
     "parallel_jobs": 1,      # generations running at the same time (read at start); one at a time thinks faster
     "llm_url": "",           # empty: the family's model (DeepSeek on the Sparks through Hoard Link); else an OpenAI-compatible URL
@@ -145,6 +150,15 @@ def normalize(data: dict[str, Any]) -> dict[str, Any]:
     data["program_timeout_s"] = _clamp(data["program_timeout_s"], 5, 600)
     data["sprite_pitch"] = _clamp(data["sprite_pitch"], 0, 89)
     data["sprite_side_pitch"] = _clamp(data["sprite_side_pitch"], 0, 89)
+    data["sprite_calibrate"] = bool(data["sprite_calibrate"])
+    if data["review_render"] not in ("lit", "flat"):
+        raise ValueError("review_render must be lit or flat")
+    data["scene_steps"] = _clamp(data["scene_steps"], 2, 30)
+    data["scene_objects"] = _clamp(data["scene_objects"], 1, 16)
+    ss = data.get("scene_size") or [128, 64, 128]
+    if not isinstance(ss, (list, tuple)) or len(ss) != 3:
+        raise ValueError("scene_size must be [x, y, z]")
+    data["scene_size"] = [_clamp(v, 16, 256) for v in ss]
     data["llm_url"] = str(data.get("llm_url") or "").strip()
     data["llm_model"] = str(data.get("llm_model") or "").strip()
     data["voxel_mm"] = _clamp(data["voxel_mm"], 0.1, 50.0, float)

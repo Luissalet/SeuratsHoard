@@ -51,6 +51,78 @@ class Services:
         self.store.save(model, version_note=note or f"{len(ops)} operations")
         return {**result, "id": model.id, "bounds": model.bounds(), "size": model.size}
 
+    # ------------------------------------------------------------------ pictures as sprite views
+    def reference_sheet(self, ref_id: str, cols: int = 0, rows: int = 0):
+        from . import sheets
+        return sheets.read(self.store.reference_bytes(ref_id), int(cols or 0), int(rows or 0))
+
+    def expand_references(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Reference entries ({id, role, frames?, views?, cols?, rows?, yaw?, pitch?}) as the pictures they stand for:
+        a sheet (role ``sheet``) becomes one entry per side it shows (its views, or the guessed ones), an entry with
+        ``frames`` takes those frames of the picture (the first is the main one, the rest poses), an animation without
+        frames gives its standing frame with the others as poses, and a plain picture stays itself. Each result has
+        role, name, meta, png (the main picture), rgba (cut out, real pixel size), poses, yaw, pitch."""
+        from PIL import Image
+        import io
+        from . import sheets
+        from .images import cutout
+        out: list[dict[str, Any]] = []
+        cache: dict[tuple, Any] = {}
+        for e in entries or []:
+            rid = str(e.get("id") or "")
+            role = str(e.get("role") or "front")
+            meta = self.store.reference(rid)
+            raw = self.store.reference_bytes(rid)
+            name = meta.get("name") or role
+            cols, rows = int(e.get("cols") or 0), int(e.get("rows") or 0)
+
+            def sheet(rid=rid, raw=raw, cols=cols, rows=rows):
+                key = (rid, cols, rows)
+                if key not in cache:
+                    cache[key] = sheets.read(raw, cols, rows)
+                return cache[key]
+
+            def frames_entry(sh, vrole, idx, yaw=None, pitch=None):
+                main = sh.frame(idx[0])
+                h, w = main.rgba.shape[:2]
+                return {"id": rid, "role": vrole, "name": f"{name} #{idx[0]}", "meta": {**meta, "name": f"{name} #{idx[0]}", "width": w, "height": h},
+                        "png": main.png(), "rgba": main.rgba, "poses": [sh.frame(i).rgba for i in idx[1:]],
+                        "yaw": yaw, "pitch": pitch, "frames": list(idx)}
+
+            if role == "sheet":
+                sh = sheet()
+                views = e.get("views") or sheets.guess_views(sh)
+                for v in views:
+                    vrole = str(v.get("role") or "none")
+                    idx = [int(i) for i in (v.get("frames") or [])]
+                    if vrole in ("front", "back", "side", "view") and idx:
+                        out.append(frames_entry(sh, vrole, idx, v.get("yaw"), v.get("pitch")))
+                continue
+            if e.get("frames"):
+                out.append(frames_entry(sheet(), role, [int(i) for i in e["frames"]], e.get("yaw"), e.get("pitch")))
+                continue
+            try:
+                animated = int(getattr(Image.open(io.BytesIO(raw)), "n_frames", 1) or 1) > 1
+            except Exception:  # noqa: BLE001
+                animated = False
+            if animated:
+                sh = sheet()
+                main = sheets.medoid(sh.frames)
+                idx = [main.index] + [f.index for f in sh.frames if f is not main]
+                out.append({**frames_entry(sh, role, idx, e.get("yaw"), e.get("pitch")), "name": name})
+                continue
+            out.append({"id": rid, "role": role, "name": name, "meta": meta, "png": raw, "rgba": cutout(raw), "poses": [],
+                        "yaw": e.get("yaw"), "pitch": e.get("pitch"), "frames": []})
+        return out
+
+    def sprite_refs(self, entries: list[dict[str, Any]]) -> list:
+        """The sprite views (``spritecam.SpriteRef``) of reference entries; see :meth:`expand_references`."""
+        from . import spritecam
+        return [spritecam.SpriteRef(e["role"], e["name"], e["rgba"],
+                                    yaw=None if e.get("yaw") is None else float(e["yaw"]),
+                                    pitch=None if e.get("pitch") is None else float(e["pitch"]), poses=list(e["poses"]))
+                for e in self.expand_references(entries) if e["role"] in ("front", "back", "side", "view")]
+
     def run_program(self, code: str, *, model_id: str = "", name: str = "", size: Optional[Iterable[int]] = None,
                     sprites: Optional[list[dict[str, str]]] = None) -> dict[str, Any]:
         """Run a voxel program (PALETTE + build(g), see program.py) into a model: an existing one (its grid and palette
@@ -59,8 +131,7 @@ class Services:
         then gets a grid of one voxel per sprite pixel."""
         from . import spritecam
         from .program import ProgramError, run_program
-        refs = [spritecam.sprite_ref(r["role"], self.store.reference(r["id"]).get("name") or r["role"], self.store.reference_bytes(r["id"]))
-                for r in (sprites or [])]
+        refs = self.sprite_refs(sprites or [])
         if model_id:
             model = self.store.get(model_id)
             dims = list(size) if size else model.size

@@ -20,7 +20,9 @@ ISO = ("iso", "iso_front_left", "iso_back_left", "iso_back_right")   # iso = see
 #: Handheld-game overworld cameras: the front and back sprites are seen from well above, the side ones in true profile.
 OVERWORLD = {"overworld_front": (0.0, 45.0), "overworld_back": (180.0, 45.0), "overworld_left": (-90.0, 0.0),
              "overworld_right": (90.0, 0.0)}
-VIEWS = ORTHO + ISO + tuple(OVERWORLD) + ("sheet",)
+#: real light (cast shadows, ambient occlusion, a ground): see lit.py
+LIT = ("lit", "lit_front_left", "lit_back_left", "lit_back_right", "lit_front", "lit_top")
+VIEWS = ORTHO + ISO + tuple(OVERWORLD) + LIT + ("sheet", "sheet_lit")
 BG_DARK = (26, 22, 30, 255)
 
 
@@ -208,16 +210,25 @@ def _label(img: Image.Image, text: str) -> Image.Image:
     return out
 
 
-def sheet(model: VoxelModel, target: int = 1024) -> Image.Image:
-    """Contact sheet: front, left, top, back as flat views and two isometric ones, labelled (what the model reviews)."""
+def sheet(model: VoxelModel, target: int = 1024, lit: bool = False) -> Image.Image:
+    """Contact sheet: front, left, top, back as flat views and two isometric ones, labelled (what the model reviews).
+    ``lit``: the two 3-D views with real light (cast shadows, ambient occlusion, a ground) instead of flat isometric."""
     sx, sy, sz = model.size
     longest = max(sx, sy, sz)
     cell = max(160, target // 3)
     scale = max(1, cell // max(longest, 1))
     iso_size = max(2, int(cell / (longest * 1.9)))
+    if lit and model.count:
+        from .lit import LitScene
+        scene = LitScene(model)
+        views3d = []
+        for label, yaw in (("lit front-right", 45.0), ("lit back-left", -135.0)):
+            u0, u1, v0, v1 = scene.extent(yaw, 30.0)
+            views3d.append((label, scene.render(yaw, 30.0, cell / max(1e-6, 1.34 * max(u1 - u0, v1 - v0)), BG_DARK)))
+    else:
+        views3d = [("iso front-right", iso(model, "iso", iso_size, BG_DARK)), ("iso back-left", iso(model, "iso_back_left", iso_size, BG_DARK))]
     tiles = [("front", ortho(model, "front", scale, BG_DARK)), ("left", ortho(model, "left", scale, BG_DARK)),
-             ("top", ortho(model, "top", scale, BG_DARK)), ("back", ortho(model, "back", scale, BG_DARK)),
-             ("iso front-right", iso(model, "iso", iso_size, BG_DARK)), ("iso back-left", iso(model, "iso_back_left", iso_size, BG_DARK))]
+             ("top", ortho(model, "top", scale, BG_DARK)), ("back", ortho(model, "back", scale, BG_DARK))] + views3d
     tiles = [_label(t, n) for n, t in tiles]
     cw = max(t.width for t in tiles) + 8
     ch = max(t.height for t in tiles) + 8
@@ -227,10 +238,19 @@ def sheet(model: VoxelModel, target: int = 1024) -> Image.Image:
     return out
 
 
-def render(model: VoxelModel, view: str = "iso", *, size: Optional[int] = None, background: str = "transparent") -> Image.Image:
+def render(model: VoxelModel, view: str = "iso", *, size: Optional[int] = None, background: str = "transparent",
+           yaw: Optional[float] = None, pitch: Optional[float] = None) -> Image.Image:
+    """``size``: pixels per voxel (flat and isometric views), the long side in pixels (lit views, default 640) or the
+    sheet's width. ``yaw``/``pitch`` turn a lit view's camera anywhere (degrees around and above)."""
     bg = (0, 0, 0, 0) if background == "transparent" else BG_DARK
-    if view == "sheet":
-        return sheet(model, size or 1024)
+    if view in ("sheet", "sheet_lit"):
+        return sheet(model, size or 1024, lit=view == "sheet_lit")
+    if view in LIT:
+        from . import lit
+        y0, p0 = lit.VIEWS[view]
+        target = int(size) if size and size >= 64 else 640
+        return lit.lit(model, y0 if yaw is None else float(yaw), p0 if pitch is None else max(-89.0, min(89.0, float(pitch))),
+                       target, bg)
     longest = max(model.size)
     if view in ORTHO:
         scale = size if size else max(1, 512 // max(longest, 1))

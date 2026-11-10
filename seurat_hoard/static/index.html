@@ -58,6 +58,11 @@
           <b>Modelo vacío.</b> Haz clic en el suelo para poner el primer voxel, o sube una imagen en <a href="#" data-goto="refs">Referencias</a>.
         </div>
         <div class="vp-help">Botón derecho: girar · Rueda: acercar · Mayús + derecho: desplazar</div>
+        <div class="preview-bar" id="preview-bar" hidden>
+          <span id="preview-text">Vista previa</span>
+          <button class="btn small primary" id="preview-save" title="Guarda esta ronda como un modelo nuevo para editarlo">Guardar como modelo</button>
+          <button class="btn small" id="preview-close" title="Vuelve al modelo que tenías abierto">Volver</button>
+        </div>
       </div>
 
       <div class="palette-bar">
@@ -137,6 +142,7 @@
               <option value="agent">Agente (programa, prueba y corrige solo)</option>
               <option value="code">Programa por rondas</option>
               <option value="ops">Operaciones (piezas sueltas)</option>
+              <option value="scene">Escena por partes (planifica objetos y los compone)</option>
             </select>
           </label>
           <label class="field" title="Sprites del juego: las imágenes frontal, trasera y lateral son sprites que hay que reconstruir en 3D, y cada versión se juzga desde la cámara del juego (que mira desde arriba)">
@@ -161,6 +167,12 @@
             <span>Nombre <small>(opcional)</small></span>
             <input type="text" id="gen-name" maxlength="120" placeholder="Automático">
           </label>
+        </div>
+
+        <div class="check-row">
+          <label title="Tras las ejecuciones, busca desde qué ángulo dibujó el juego cada sprite comparando la silueta del modelo, en vez de los 45° fijos">
+            <input type="checkbox" id="gen-calibrate" checked> Calibrar sola la cámara de los sprites</label>
+          <button type="button" class="btn small" id="btn-calibrate" title="Busca la cámara de cada sprite elegido con el modelo abierto">Calibrar con el modelo abierto</button>
         </div>
 
         <div class="radio-row" role="radiogroup" aria-label="Dónde guardar">
@@ -214,9 +226,32 @@
                 <option value="top">Arriba</option>
                 <option value="bottom">Abajo</option>
                 <option value="sheet">Hoja con todas las vistas</option>
+                <option value="lit">Con luz (frente-derecha)</option>
+                <option value="lit_front_left">Con luz (frente-izquierda)</option>
+                <option value="lit_back_left">Con luz (detrás-izquierda)</option>
+                <option value="lit_back_right">Con luz (detrás-derecha)</option>
+                <option value="lit_front">Con luz (de frente)</option>
+                <option value="lit_top">Con luz (desde arriba)</option>
+                <option value="sheet_lit">Hoja con todas las vistas, con luz</option>
               </select>
             </div>
             <button class="btn small" data-export="png">Descargar PNG</button>
+          </div>
+          <div class="export-row">
+            <div><b>Animación de giro</b><small>con luz y sombras</small>
+              <span class="spin-opts">
+                <select id="spin-format" class="inline-select" aria-label="Formato de la animación">
+                  <option value="gif">GIF</option>
+                  <option value="webm">WebM (vídeo)</option>
+                </select>
+                <select id="spin-frames" class="inline-select" aria-label="Fotogramas por vuelta">
+                  <option value="24">24 fotogramas</option>
+                  <option value="36" selected>36 fotogramas</option>
+                  <option value="60">60 fotogramas</option>
+                </select>
+              </span>
+            </div>
+            <button class="btn small" id="btn-spin">Descargar giro</button>
           </div>
           <div class="export-row">
             <div><b>Sprites isométricos</b><small>los cuatro lados en una imagen</small></div>
@@ -249,6 +284,13 @@
           <label class="srow"><span>Tiempo máximo del programa (s)</span><input type="number" name="program_timeout_s" min="5" max="600" step="5"></label>
           <label class="srow"><span>Sprites: grados de la cámara frontal y trasera <small>(sobre el horizonte)</small></span><input type="number" name="sprite_pitch" min="0" max="89" step="1"></label>
           <label class="srow"><span>Sprites: grados de la cámara lateral</span><input type="number" name="sprite_side_pitch" min="0" max="89" step="1"></label>
+          <label class="srow"><span>Sprites: calibrar la cámara durante las generaciones</span><input type="checkbox" name="sprite_calibrate"></label>
+          <label class="srow"><span>Vistas 3D de las revisiones</span>
+            <select name="review_render"><option value="lit">Con luz (sombras y oclusión)</option><option value="flat">Isométricas planas</option></select></label>
+          <label class="srow"><span>Escenas: acciones por objeto</span><input type="number" name="scene_steps" min="2" max="30" step="1"></label>
+          <label class="srow"><span>Escenas: objetos como máximo</span><input type="number" name="scene_objects" min="1" max="16" step="1"></label>
+          <div class="srow"><span>Escenas: tamaño (x × y × z)</span>
+            <span class="triple"><input type="number" name="scene_size_x" min="16" max="256"><input type="number" name="scene_size_y" min="16" max="256"><input type="number" name="scene_size_z" min="16" max="256"></span></div>
           <label class="srow"><span>Pintar las referencias sobre la forma</span><input type="checkbox" name="auto_paint"></label>
           <label class="srow"><span>Pintar también la imagen lateral en los lados</span><input type="checkbox" name="paint_sides"></label>
           <label class="srow"><span>Generaciones a la vez <small>(al reiniciar)</small></span><input type="number" name="parallel_jobs" min="1" max="6" step="1"></label>

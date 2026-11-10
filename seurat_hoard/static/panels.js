@@ -5,15 +5,18 @@ import { $, el, api, toast, fail, modal, confirmBox, nf, store } from './ui.js';
 import { initParts } from './parts.js';
 
 const ROLES = [
-  ['front', 'Frente'], ['side', 'Lado (izquierdo)'], ['top', 'Arriba'], ['back', 'Detrás'], ['extra', 'Extra'], ['none', 'No usar'],
+  ['front', 'Frente'], ['side', 'Lado (izquierdo)'], ['top', 'Arriba'], ['back', 'Detrás'], ['extra', 'Extra'],
+  ['sheet', 'Hoja o animación (todas sus vistas)'], ['view', 'Vista libre (se calibra)'], ['none', 'No usar'],
 ];
-const ROLE_ORDER = { front: 0, side: 1, top: 2, back: 3, extra: 4 };
+const ROLE_ORDER = { sheet: -1, front: 0, side: 1, top: 2, back: 3, extra: 4, view: 5 };
+const VIEW_ROLES = [['front', 'Frente'], ['back', 'Detrás'], ['side', 'Lado'], ['view', 'Vista libre'], ['none', 'No usar']];
 const MAX_REFS = 6;
 const JOB_STATUS = { queued: 'En cola', running: 'Trabajando', done: 'Hecho', failed: 'Error', cancelled: 'Cancelado' };
 const START_LABEL = { auto: 'automático', inflate: 'inflar', hull: 'silueta', extrude: 'extruir', empty: 'vacío', current: 'modelo actual' };
 
 let ctx;
-const refs = { list: [], roles: store('roles') || {} };
+// sheets: per reference id, the grid and the sides chosen in «Fotogramas» ({cols, rows, views: [{role, frames}]})
+const refs = { list: [], roles: store('roles') || {}, sheets: store('sheets') || {} };
 const job = { id: null, data: null, timer: null, watching: false, started: 0 };
 
 export function initPanels(context) {
@@ -71,6 +74,8 @@ async function loadReferences() {
     // roles of references that no longer exist go away; a first visit uses the newest picture as the front
     const ids = new Set(refs.list.map((r) => r.id));
     for (const k of Object.keys(refs.roles)) if (!ids.has(k)) delete refs.roles[k];
+    for (const k of Object.keys(refs.sheets)) if (!ids.has(k)) delete refs.sheets[k];
+    store('sheets', refs.sheets);
     if (refs.list.length && !refs.list.some((r) => refs.roles[r.id])) refs.roles[refs.list[0].id] = 'front';
     saveRoles();
   } catch (err) { fail(err); }
@@ -112,7 +117,10 @@ function renderReferences() {
           onclick: (e) => { e.stopPropagation(); deleteReference(r); } })),
       el('div', { class: 'ref-body' },
         el('div', { class: 'ref-name', title: r.name }, r.name, el('small', { text: `${r.width}×${r.height}` })),
-        roleSelect(r)));
+        roleSelect(r),
+        el('button', { class: 'ref-frames', type: 'button', text: refs.sheets[r.id] ? 'Fotogramas ✓' : 'Fotogramas',
+          title: 'Leer cada fotograma de una animación o cada celda de una hoja de sprites y elegir qué lado muestra cada uno',
+          onclick: () => showFrames(r) })));
     grid.append(card);
   }
   renderGenRefs();
@@ -194,6 +202,121 @@ async function showReference(r) {
   } catch (err) { fail(err); }
 }
 
+// ================================================================= frames of animations and sprite sheets
+async function showFrames(r) {
+  const saved = refs.sheets[r.id] || {};
+  const cols = el('input', { type: 'number', min: '0', max: '64', value: String(saved.cols || 0) });
+  const rows = el('input', { type: 'number', min: '0', max: '64', value: String(saved.rows || 0) });
+  const img = el('img', { alt: 'Fotogramas numerados' });
+  const info = el('p', { class: 'pane-tip', text: 'Leyendo los fotogramas…' });
+  const table = el('table', { class: 'views-table' });
+  let views = saved.views && saved.views.length ? saved.views.map((v) => ({ ...v })) : null;
+  let count = 0;
+  const renderViews = () => {
+    table.replaceChildren(el('tr', {}, el('th', { text: 'Lado' }), el('th', { text: 'Fotogramas (el primero es el principal; los demás, poses)' })));
+    (views || []).forEach((v, i) => {
+      const sel = el('select', { 'aria-label': 'Lado' }, ...VIEW_ROLES.map(([val, label]) => el('option', { value: val, text: label })));
+      sel.value = v.role;
+      sel.addEventListener('change', () => { views[i].role = sel.value; });
+      const fr = el('input', { type: 'text', value: (v.frames || []).join(', '), 'aria-label': 'Fotogramas' });
+      fr.addEventListener('change', () => {
+        views[i].frames = fr.value.split(/[\s,;]+/).map((x) => parseInt(x, 10)).filter((x) => Number.isInteger(x) && x >= 0 && x < count);
+      });
+      table.append(el('tr', {}, el('td', {}, sel), el('td', {}, fr)));
+    });
+    table.append(el('tr', {}, el('td', { colspan: '2' }, el('button', { type: 'button', class: 'btn small', text: '+ Añadir lado',
+      onclick: () => { views = views || []; views.push({ role: 'view', frames: [] }); renderViews(); } }))));
+  };
+  const load = async (keep) => {
+    try {
+      const q = `cols=${parseInt(cols.value, 10) || 0}&rows=${parseInt(rows.value, 10) || 0}`;
+      const res = await api(`/api/references/${r.id}/frames?${q}`);
+      count = res.count;
+      img.src = `/api/references/${r.id}/frames.png?${q}&t=${Date.now()}`;
+      const kind = res.kind === 'animation' ? 'Animación' : res.kind === 'grid' ? 'Hoja de sprites' : 'Imagen suelta';
+      info.textContent = `${kind}: ${res.count} fotogramas${res.kind === 'grid' ? ` en ${res.rows} filas y ${res.cols} columnas` : ''}. `
+        + 'Cada lado se usa como otra cámara del mismo modelo; su primer fotograma es el principal y los demás cuentan como poses (pasos de la animación).';
+      if (!keep || !views) views = res.views.map((v) => ({ ...v }));
+      renderViews();
+    } catch (err) { fail(err); info.textContent = err.message; }
+  };
+  load(true);
+  const res = await modal({
+    title: `Fotogramas de «${r.name}»`, wide: true,
+    body: [el('div', { class: 'frames-box' },
+      el('div', { class: 'frames-grid' }, el('label', {}, 'Columnas ', cols), el('label', {}, 'Filas ', rows),
+        el('small', { text: '0 = las encuentra sola' }),
+        el('button', { type: 'button', class: 'btn small', text: 'Volver a detectar', onclick: () => load(false) })),
+      el('div', { class: 'imgbox' }, img), info, table)],
+    buttons: [{ label: 'Cerrar', value: null }, { label: 'Quitar la hoja', value: 'clear' }, { label: 'Usar como vistas', value: 'use', kind: 'primary' }],
+  });
+  if (!res) return;
+  if (res.value === 'clear') {
+    delete refs.sheets[r.id];
+    if (roleOf(r.id) === 'sheet') refs.roles[r.id] = 'front';
+  } else {
+    refs.sheets[r.id] = { cols: parseInt(cols.value, 10) || 0, rows: parseInt(rows.value, 10) || 0,
+      views: (views || []).filter((v) => v.role !== 'none' && v.frames && v.frames.length) };
+    refs.roles[r.id] = 'sheet';
+    toast('La hoja se usará con todas sus vistas al generar y al calibrar.', 'ok');
+  }
+  store('sheets', refs.sheets);
+  saveRoles();
+  renderReferences();
+}
+
+// what is sent for a reference: its role and, for a sheet, the grid and the sides chosen
+function refEntry(r) {
+  const role = roleOf(r.id);
+  const e = { id: r.id, role };
+  const sh = refs.sheets[r.id];
+  if (role === 'sheet' && sh) {
+    if (sh.views && sh.views.length) e.views = sh.views;
+    if (sh.cols) e.cols = sh.cols;
+    if (sh.rows) e.rows = sh.rows;
+  }
+  return e;
+}
+
+// ================================================================= camera calibration
+async function calibrateCamera(btn) {
+  const m = ctx.current();
+  if (!m || m.preview) { toast('Abre un modelo guardado primero.', 'err'); return; }
+  const used = usedReferences().filter((r) => ['front', 'back', 'side', 'view', 'sheet'].includes(roleOf(r.id))).slice(0, MAX_REFS);
+  if (!used.length) { toast('Elige sprites con papel Frente, Detrás, Lado, Vista libre u Hoja.', 'err'); return; }
+  btn.disabled = true;
+  toast('Calibrando la cámara de cada sprite…');
+  try {
+    await ctx.flushSave();
+    const res = await api(`/api/models/${m.id}/calibrate`, { method: 'POST', body: { references: used.map(refEntry) } });
+    const deg = (v) => (v === null || v === undefined ? '—' : `${Math.round(v)}°`);
+    const rows = res.cameras.map((c) => el('tr', {},
+      el('td', { text: c.role }), el('td', { text: c.name }),
+      el('td', { text: `${deg(c.before.yaw)} / ${deg(c.before.pitch)} · ${c.before.iou.toFixed(2)}` }),
+      el('td', { text: `${deg(c.yaw)} / ${deg(c.pitch)} · ${c.iou.toFixed(2)}` })));
+    const s = res.suggested_settings || {};
+    const out = await modal({
+      title: 'Cámara de los sprites', wide: true,
+      body: [
+        el('p', { text: `Coincidencia media: ${res.match_before.toFixed(2)} con las cámaras actuales → ${res.match.toFixed(2)} con las calibradas.` }),
+        el('table', { class: 'cal-table' }, el('tr', {}, el('th', { text: 'Lado' }), el('th', { text: 'Sprite' }),
+          el('th', { text: 'Antes (giro / altura · coincidencia)' }), el('th', { text: 'Calibrada' })), ...rows),
+        el('img', { class: 'cal-img', src: res.image, alt: 'Cada sprite junto al modelo desde su cámara calibrada' }),
+        el('p', { text: `Alturas propuestas: frente y detrás ${s.sprite_pitch ?? '—'}°, lado ${s.sprite_side_pitch ?? '—'}°.` }),
+      ],
+      buttons: [{ label: 'Cerrar', value: null }, { label: 'Guardar las alturas en Ajustes', value: 'apply', kind: 'primary' }],
+    });
+    if (out && out.value === 'apply') {
+      const body = Object.fromEntries(Object.entries(s).filter(([, v]) => v !== null && v !== undefined));
+      const saved = await api('/api/settings', { method: 'POST', body });
+      ctx.setSettings(saved);
+      fillSettings(saved, false);
+      toast('Alturas de cámara guardadas en Ajustes.', 'ok');
+    }
+  } catch (err) { fail(err); }
+  btn.disabled = false;
+}
+
 // ================================================================= generate
 function initGenerate() {
   for (const id of ['gen-size', 'gen-colors', 'gen-rounds']) $(id).addEventListener('input', syncOutputs);
@@ -203,6 +326,17 @@ function initGenerate() {
   $('gen-prompt').addEventListener('input', () => store('prompt', $('gen-prompt').value));
   $('btn-generate').addEventListener('click', () => startGeneration());
   for (const b of document.querySelectorAll('[data-build]')) b.addEventListener('click', () => quickBuild(b.dataset.build, b));
+  $('btn-calibrate').addEventListener('click', (e) => calibrateCamera(e.currentTarget));
+  $('gen-method').addEventListener('change', syncMethod);
+  syncMethod();
+}
+
+// a scene by parts may be up to 256 voxels a side (each of its objects up to 128)
+function syncMethod() {
+  const scene = $('gen-method').value === 'scene';
+  $('gen-size').max = scene ? '256' : '128';
+  if (scene && parseInt($('gen-size').value, 10) < 64) $('gen-size').value = '128';
+  syncOutputs();
 }
 
 function syncOutputs() {
@@ -261,8 +395,17 @@ function genParams() {
   const start = $('gen-start').value;
   const into = document.querySelector('input[name="gen-dest"]:checked').value === 'into' || start === 'current';
   const m = ctx.current();
+  const side = parseInt($('gen-size').value, 10);
+  if ($('gen-method').value === 'scene') {
+    return {
+      references: used.map(refEntry), prompt: $('gen-prompt').value.trim(), name: into ? '' : $('gen-name').value.trim(),
+      into: into && m && m.id ? m.id : '', method: 'scene', rounds: Math.min(1, parseInt($('gen-rounds').value, 10)),
+      effort: $('gen-effort').value, size: [side, Math.max(16, Math.round(side / 2)), side], start: 'auto',
+    };
+  }
   return {
-    references: used.map((r) => ({ id: r.id, role: roleOf(r.id) })),
+    references: used.map(refEntry),
+    calibrate: $('gen-calibrate').checked,
     prompt: $('gen-prompt').value.trim(),
     name: into ? '' : $('gen-name').value.trim(),
     into: into && m ? m.id : '',
@@ -282,9 +425,10 @@ function genParams() {
 function spriteTarget(used) {
   const t = $('gen-target').value;
   if (t === 'free' || !['agent', 'auto', 'parts'].includes($('gen-method').value)) return false;
-  const views = used.filter((r) => ['front', 'back', 'side'].includes(roleOf(r.id)));
+  const views = used.filter((r) => ['front', 'back', 'side', 'view', 'sheet'].includes(roleOf(r.id)));
   if (!views.length) return false;
-  return t === 'sprite' || views.every((r) => Math.max(r.width || 999, r.height || 999) <= 160);
+  // a sheet is judged frame by frame (each cell is a small sprite), a single picture by its size
+  return t === 'sprite' || views.every((r) => roleOf(r.id) === 'sheet' || Math.max(r.width || 999, r.height || 999) <= 160);
 }
 
 async function startGeneration(params) {
@@ -426,9 +570,19 @@ function renderJob(d) {
     }
   }
   if (d.brief) {
-    const det = el('details', { class: 'job-brief' }, el('summary', { text: 'Brief de diseño del modelo' }));
+    const det = el('details', { class: 'job-brief' }, el('summary', { text: d.params && d.params.method === 'scene' ? 'Plan de la escena' : 'Brief de diseño del modelo' }));
     det.append(el('pre', { text: d.brief }));
     parts.push(det);
+  }
+  const deg = (v) => (v === null || v === undefined ? '' : `${Math.round(v)}°`);
+  if ((d.sprites || []).some((s) => s.poses)) {
+    parts.push(el('div', { class: 'job-extra', text: 'Vistas: ' + d.sprites.map((s) => `${s.role}${s.poses ? ` + ${s.poses} poses` : ''}`).join(' · ') }));
+  }
+  if ((d.cameras || []).length) {
+    parts.push(el('div', { class: 'job-extra', text: 'Cámaras calibradas: ' + d.cameras.map((c) => `${c.role} ${c.yaw !== null ? `giro ${deg(c.yaw)}, ` : ''}${deg(c.pitch)} de altura`).join(' · ') }));
+  }
+  if ((d.parts || []).length) {
+    parts.push(el('div', { class: 'job-extra', text: 'Objetos: ' + d.parts.map((p) => `${p.name}${p.count ? ` (${nf.format(p.count)} voxels)` : ' (pendiente)'}${p.placements.length > 1 ? ` ×${p.placements.length}` : ''}`).join(' · ') }));
   }
   const log = el('div', { class: 'job-log' }, ...(d.log || []).map((l) =>
     el('div', {}, el('time', { text: new Date(l.t * 1000).toLocaleTimeString('es-ES') }), l.text)));
@@ -439,9 +593,23 @@ function renderJob(d) {
       ? el('img', { src: `/renders/${r.render}`, alt: `Ronda ${r.round}`, loading: 'lazy', onclick: () => showRender(r) })
       : el('div', { class: 'noimg', text: 'vacío' });
     const isStart = r.round === 0;
+    const title = isStart ? (d.params && d.params.method === 'scene' ? 'Plan de la escena' : `Inicio (${START_LABEL[(r.notes || '').replace('inicio: ', '')] || r.notes})`)
+      : `${r.part && r.part !== 'escena' ? `${r.part} · ` : ''}Ronda ${r.round}`;
+    const actions = r.snapshot ? el('div', { class: 'round-actions' },
+      el('button', { type: 'button', class: 'btn small', text: 'Ver en 3D', title: 'Abre esta ronda en el editor (vista previa, sin guardar)',
+        onclick: () => ctx.openPreview(d.id, r.round, title).catch(fail) }),
+      el('button', { type: 'button', class: 'btn small', text: 'Guardar como modelo', title: 'Guarda esta ronda como un modelo nuevo',
+        onclick: async () => {
+          try {
+            const res = await api(`/api/jobs/${d.id}/rounds/${r.round}/save`, { method: 'POST', body: {} });
+            await ctx.refreshModels();
+            await ctx.openModel(res.id);
+            toast(`Guardada como «${res.name}».`, 'ok');
+          } catch (err) { fail(err); }
+        } })) : null;
     rounds.append(el('div', { class: 'round' }, img,
       el('div', {},
-        el('div', { class: 'round-title', text: isStart ? `Inicio (${START_LABEL[(r.notes || '').replace('inicio: ', '')] || r.notes})` : `Ronda ${r.round}` }),
+        el('div', { class: 'round-title', text: title }),
         el('div', { class: 'round-meta', text: `${nf.format(r.count)} voxels${isStart ? '' : ` · ${r.applied} operaciones`}${r.size ? ` · ${r.size.join('×')}` : ''}` }),
         r.match !== undefined ? el('div', { class: 'round-meta', text: `Coincidencia con los sprites: ${r.match.toFixed(2)} (${(r.views || []).map((v) => `${v.role} ${v.iou.toFixed(2)}`).join(', ')})` }) : null,
         r.parts_render ? el('img', { class: 'sprite-cmp', src: `/renders/${r.parts_render}`, alt: 'El sprite lateral y sus partes', loading: 'lazy',
@@ -449,7 +617,8 @@ function renderJob(d) {
         r.sprite_render ? el('img', { class: 'sprite-cmp', src: `/renders/${r.sprite_render}`, alt: 'Sprites frente al modelo', loading: 'lazy',
           onclick: () => showRender({ ...r, render: r.sprite_render }) }) : null,
         !isStart && r.notes ? el('div', { class: 'round-notes', text: r.notes }) : null,
-        r.errors && r.errors.length ? el('ul', { class: 'round-errors' }, ...r.errors.map((e) => el('li', { text: e }))) : null)));
+        r.errors && r.errors.length ? el('ul', { class: 'round-errors' }, ...r.errors.map((e) => el('li', { text: e }))) : null,
+        actions)));
   }
   if ((d.rounds || []).length) parts.push(rounds);
   box.replaceChildren(...parts);
@@ -471,6 +640,7 @@ let exportStale = true;
 
 function initExport() {
   for (const b of document.querySelectorAll('[data-export]')) b.addEventListener('click', () => doExport(b.dataset.export, b));
+  $('btn-spin').addEventListener('click', (e) => doExport('spin', e.currentTarget));
   $('export-img').addEventListener('error', () => { $('export-img').hidden = true; $('export-empty').hidden = false; });
   $('export-img').addEventListener('load', () => { $('export-img').hidden = false; $('export-empty').hidden = true; });
 }
@@ -494,10 +664,10 @@ const fmtNum = (v) => new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 
 function refreshExport(force) {
   if (!force) { exportStale = true; if (!paneVisible('export')) return; }
   const m = ctx.current();
-  if (!m) return;
+  if (!m || m.preview) return;
   exportStale = false;
   const empty = ctx.editor.count === 0;
-  for (const b of document.querySelectorAll('[data-export]')) b.disabled = empty;
+  for (const b of document.querySelectorAll('[data-export], #btn-spin')) b.disabled = empty;
   $('export-empty').hidden = !empty;
   $('export-img').hidden = empty;
   if (!empty) $('export-img').src = `/api/models/${m.id}/render.png?view=sheet&t=${Date.now()}`;
@@ -515,11 +685,14 @@ function refreshExport(force) {
 async function doExport(fmt, btn) {
   const m = ctx.current();
   if (!m) return;
+  if (m.preview) { toast('Es una vista previa: guárdala como modelo para exportarla.', 'err'); return; }
   btn.disabled = true;
+  if (fmt === 'spin') toast('Preparando la animación (unos segundos)…');
   try {
     await ctx.flushSave();
     let url = `/api/models/${m.id}/export/${fmt}`;
     if (fmt === 'png') url += `?view=${$('png-view').value}`;
+    if (fmt === 'spin') url = `/api/models/${m.id}/spin/${$('spin-format').value}?frames=${$('spin-frames').value}`;
     // ask first so an error comes back as a message instead of a broken download
     const head = await fetch(url, { method: 'GET' });
     if (!head.ok) {
@@ -554,6 +727,9 @@ function initSettings() {
       max_tokens: +f.max_tokens.value, thinking_tokens: +f.thinking_tokens.value, timeout_s: +f.timeout_s.value,
       method: f.method.value, agent_steps: +f.agent_steps.value, agent_minutes: +f.agent_minutes.value, code_size: +f.code_size.value, program_timeout_s: +f.program_timeout_s.value,
       sprite_pitch: +f.sprite_pitch.value, sprite_side_pitch: +f.sprite_side_pitch.value,
+      sprite_calibrate: f.sprite_calibrate.checked, review_render: f.review_render.value,
+      scene_steps: +f.scene_steps.value, scene_objects: +f.scene_objects.value,
+      scene_size: [+f.scene_size_x.value, +f.scene_size_y.value, +f.scene_size_z.value],
       auto_paint: f.auto_paint.checked, paint_sides: f.paint_sides.checked, parallel_jobs: +f.parallel_jobs.value, llm_url: f.llm_url.value.trim(), llm_model: f.llm_model.value.trim(),
       voxel_mm: +f.voxel_mm.value, glb_voxel_size: +f.glb_voxel_size.value,
       new_size: [+f.new_size_x.value, +f.new_size_y.value, +f.new_size_z.value],
@@ -576,9 +752,12 @@ function fillSettings(s, defaults) {
   if (!s) return;
   if (!settingsDirty) {
     const f = $('settings-form').elements;
-    for (const k of ['max_side', 'colors', 'review_rounds', 'effort', 'max_tokens', 'thinking_tokens', 'parallel_jobs', 'method', 'agent_steps', 'agent_minutes', 'code_size', 'program_timeout_s', 'sprite_pitch', 'sprite_side_pitch', 'timeout_s', 'llm_url', 'llm_model', 'voxel_mm', 'glb_voxel_size']) {
+    for (const k of ['max_side', 'colors', 'review_rounds', 'effort', 'max_tokens', 'thinking_tokens', 'parallel_jobs', 'method', 'agent_steps', 'agent_minutes', 'code_size', 'program_timeout_s', 'sprite_pitch', 'sprite_side_pitch', 'timeout_s', 'llm_url', 'llm_model', 'voxel_mm', 'glb_voxel_size', 'review_render', 'scene_steps', 'scene_objects']) {
       if (f[k] && s[k] !== undefined) f[k].value = s[k];
     }
+    if (f.sprite_calibrate) f.sprite_calibrate.checked = s.sprite_calibrate !== false;
+    const [sx, sy, sz] = s.scene_size || [128, 64, 128];
+    f.scene_size_x.value = sx; f.scene_size_y.value = sy; f.scene_size_z.value = sz;
     if (f.auto_paint) f.auto_paint.checked = s.auto_paint !== false;
     if (f.paint_sides) f.paint_sides.checked = !!s.paint_sides;
     const [x, y, z] = s.new_size || [32, 32, 32];
@@ -592,7 +771,8 @@ function fillSettings(s, defaults) {
     // the form stays on automatic (sprites with a side view by parts) unless the settings ask for another method
   if (s.method && s.method !== 'agent') $('gen-method').value = s.method;
     if (['code', 'agent'].includes(s.method) && s.code_size) $('gen-size').value = Math.max(8, Math.min(128, s.code_size));
-    syncOutputs();
+    $('gen-calibrate').checked = s.sprite_calibrate !== false;
+    syncMethod();
   }
 }
 

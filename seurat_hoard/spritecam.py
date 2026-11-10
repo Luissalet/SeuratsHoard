@@ -32,9 +32,19 @@ ZOOM = 6
 
 @dataclass
 class SpriteRef:
-    role: str                      # front | back | side
+    role: str                      # front | back | side | view (any other side: its camera is found by calibration)
     name: str
     rgba: np.ndarray               # (h, w, 4), background removed, cropped, pixel-art enlargement undone
+    yaw: Optional[float] = None    # the camera of this sprite when known (calibrated or given); None = the role's default
+    pitch: Optional[float] = None
+    poses: list = field(default_factory=list)      # other frames of the same side (walk steps): (h, w, 4) arrays
+
+    def camera(self, front_back_pitch: float = 45.0, side_pitch: float = 0.0) -> tuple[Optional[float], float]:
+        """(yaw, pitch) of this sprite's camera: its own when set, else the role's (side: yaw None = try both sides)."""
+        pitch = self.pitch if self.pitch is not None else (side_pitch if self.role == "side" else front_back_pitch)
+        if self.yaw is not None:
+            return float(self.yaw), float(pitch)
+        return {"front": 0.0, "back": 180.0}.get(self.role), float(pitch)
 
 
 @dataclass
@@ -54,9 +64,24 @@ class ViewMatch:
     panels: list[Image.Image] = field(default_factory=list)
     missing_mask: Optional[np.ndarray] = None     # (h, w) sprite pixels the model does not cover
     extra_mask: Optional[np.ndarray] = None       # (h, w) model pixels outside the sprite
+    pose_ious: list = field(default_factory=list)  # the other frames of this side (walk steps) against the same render
+
+    @property
+    def score(self) -> float:
+        """The view's share of the overall match: the main frame, and with poses half main frame, half their mean."""
+        if not self.pose_ious:
+            return self.iou
+        return 0.5 * self.iou + 0.5 * float(np.mean(self.pose_ious))
 
     def summary(self) -> str:
-        where = {"front": "in front", "back": "behind", "side": "at the side"}.get(self.role, self.role)
+        text = self._summary()
+        if self.pose_ious:
+            text += (f" Its {len(self.pose_ious)} other frames (poses of the walk) match {min(self.pose_ious):.2f}-"
+                     f"{max(self.pose_ious):.2f}: a static model in a neutral pose sits between them.")
+        return text
+
+    def _summary(self) -> str:
+        where = {"front": "in front", "back": "behind", "side": "at the side"}.get(self.role, f"{self.yaw:.0f} degrees around")
         shape = ""
         if self.fit == "pixel":
             wr, hr = self.size_ratio
@@ -80,7 +105,8 @@ class ViewMatch:
         return {"role": self.role, "name": self.name, "yaw": self.yaw, "pitch": self.pitch, "iou": round(self.iou, 3),
                 "missing": round(self.missing, 3), "extra": round(self.extra, 3), "colour": round(self.colour, 3),
                 "sprite_aspect": round(self.sprite_aspect, 3), "model_aspect": round(self.model_aspect, 3), "fit": self.fit,
-                "size_ratio": [round(float(v), 3) for v in self.size_ratio]}
+                "size_ratio": [round(float(v), 3) for v in self.size_ratio],
+                **({"poses": [round(float(v), 3) for v in self.pose_ious], "score": round(self.score, 3)} if self.pose_ious else {})}
 
 
 def sprite_ref(role: str, name: str, data: bytes) -> SpriteRef:
@@ -224,6 +250,13 @@ def match_view(model: VoxelModel, ref: SpriteRef, yaw: float, pitch: float, fit:
     diff[m_mask & ~t_mask] = (60, 120, 240, 255)
     vm.panels = [_big(t), _big(m), _big(diff)]
     vm.missing_mask, vm.extra_mask = t_mask & ~m_mask, m_mask & ~t_mask
+    for pose in ref.poses or []:
+        p_mask = pose[..., 3] >= 128
+        if fit == "pixel":
+            pm = _place(proj, p_mask)[..., 3] >= 128
+        else:
+            pm = _fit(r, pose.shape[:2], _bbox(p_mask) or (0, 0, pose.shape[1], pose.shape[0]))[..., 3] >= 128
+        vm.pose_ious.append(float((p_mask & pm).sum()) / max(1, int((p_mask | pm).sum())))
     return vm
 
 
@@ -233,14 +266,178 @@ def match(model: VoxelModel, refs: list[SpriteRef], front_back_pitch: float = FR
     (sheets draw one side and mirror it)."""
     out = []
     for ref in refs:
-        if ref.role == "front":
-            out.append(match_view(model, ref, 0.0, front_back_pitch, fit))
-        elif ref.role == "back":
-            out.append(match_view(model, ref, 180.0, front_back_pitch, fit))
+        yaw, pitch = ref.camera(front_back_pitch, side_pitch)
+        if ref.role not in ("front", "back", "side", "view"):
+            continue
+        if yaw is not None:
+            out.append(match_view(model, ref, yaw, pitch, fit))
         elif ref.role == "side":
-            a, b = match_view(model, ref, -90.0, side_pitch, fit), match_view(model, ref, 90.0, side_pitch, fit)
+            a, b = match_view(model, ref, -90.0, pitch, fit), match_view(model, ref, 90.0, pitch, fit)
             out.append(a if a.iou >= b.iou else b)
+        else:                                       # a view whose camera is not known yet: the best yaw around
+            best = calibrate_one(model, ref, front_back_pitch, side_pitch, fit=fit)
+            out.append(match_view(model, ref, best["yaw"], best["pitch"], fit))
     return out
+
+
+# ---------------------------------------------------------------------------------------------- camera calibration
+class Silhouette:
+    """A model's silhouette from any camera at one pixel per voxel, fast (no colours, no depth): what calibration
+    compares with the sprites at dozens of camera angles."""
+
+    def __init__(self, model: VoxelModel):
+        occ = np.argwhere(model.grid > 0)
+        self.empty = not len(occ)
+        self.pts = (occ[:, None, :] + _SAMPLES[None]).reshape(-1, 3) if len(occ) else np.zeros((0, 3))
+        self.model = model
+
+    def mask(self, yaw: float, pitch: float) -> np.ndarray:
+        from .render import camera_basis
+        if self.empty:
+            return np.zeros((1, 1), bool)
+        _, r, u = camera_basis(yaw, pitch)
+        pu, pv = self.pts @ r, -(self.pts @ u)
+        ix = np.floor(pu - np.floor(pu.min())).astype(np.int64)
+        iy = np.floor(pv - np.floor(pv.min())).astype(np.int64)
+        h, w = int(iy.max()) + 1, int(ix.max()) + 1
+        out = np.zeros(h * w, bool)
+        out[iy * w + ix] = True
+        return out.reshape(h, w)
+
+
+def _mask_iou(m: np.ndarray, t_mask: np.ndarray, fit: str, search: int = 4) -> float:
+    """Silhouette match of a model mask on a sprite mask: pixel fit = one voxel per pixel at the best shift; area fit =
+    scaled to the sprite subject's area first."""
+    tb = _bbox(t_mask)
+    mb = _bbox(m)
+    if tb is None or mb is None:
+        return 0.0
+    if fit == "area":
+        crop = Image.fromarray((m[mb[1]:mb[3], mb[0]:mb[2]] * 255).astype(np.uint8), "L")
+        f = float(np.sqrt(((tb[2] - tb[0]) * (tb[3] - tb[1])) / max(1, crop.width * crop.height)))
+        crop = crop.resize((max(1, round(crop.width * f)), max(1, round(crop.height * f))), Image.BOX)
+        m = np.asarray(crop) >= 128
+        mb = _bbox(m)
+        if mb is None:
+            return 0.0
+    h_t, w_t = t_mask.shape
+    ox0 = int(round((tb[0] + tb[2]) / 2 - (mb[0] + mb[2]) / 2))
+    oy0 = int(round((tb[1] + tb[3]) / 2 - (mb[1] + mb[3]) / 2))
+    t_area = int(t_mask.sum())
+    m_area = int(m.sum())
+    best = 0.0
+    for dy in range(-search, search + 1):
+        for dx in range(-search, search + 1):
+            ox, oy = ox0 + dx, oy0 + dy
+            y0, x0 = max(0, oy), max(0, ox)
+            y1, x1 = min(h_t, oy + m.shape[0]), min(w_t, ox + m.shape[1])
+            inter = int((t_mask[y0:y1, x0:x1] & m[y0 - oy:y1 - oy, x0 - ox:x1 - ox]).sum()) if y1 > y0 and x1 > x0 else 0
+            iou = inter / max(1, t_area + m_area - inter)
+            if iou > best:
+                best = iou
+    return best
+
+
+def _fit_mode(sil: Silhouette, t_mask: np.ndarray, yaw: float, pitch: float, fit: str) -> str:
+    if fit != "auto":
+        return fit
+    pm, tb = _bbox(sil.mask(yaw, pitch)), _bbox(t_mask)
+    if pm is None or tb is None:
+        return "pixel"
+    ratio = ((pm[2] - pm[0]) * (pm[3] - pm[1])) / max(1, (tb[2] - tb[0]) * (tb[3] - tb[1]))
+    return "pixel" if 0.4 <= ratio <= 2.5 else "area"
+
+
+#: how far calibration looks from each role's usual camera: (yaw centres, yaw half-range, pitch range)
+SEARCH = {"front": ((0.0,), 20.0, (0.0, 80.0)), "back": ((180.0,), 20.0, (0.0, 80.0)),
+          "side": ((-90.0, 90.0), 20.0, (0.0, 60.0)), "view": ((0.0,), 180.0, (0.0, 80.0))}
+#: during a generation the camera may only move this far (the model is still being built: a wide search would bend the
+#: camera to a wrong model)
+SEARCH_GENERATION = {"front": ((0.0,), 10.0, (20.0, 70.0)), "back": ((180.0,), 10.0, (20.0, 70.0)),
+                     "side": ((-90.0, 90.0), 10.0, (0.0, 30.0)), "view": ((0.0,), 180.0, (0.0, 70.0))}
+
+
+def calibrate_one(model: VoxelModel, ref: SpriteRef, front_back_pitch: float = FRONT_BACK_PITCH, side_pitch: float = SIDE_PITCH,
+                  fit: str = "auto", search: Optional[dict] = None, sil: Optional[Silhouette] = None) -> dict[str, Any]:
+    """The camera (yaw, pitch) from which the model's silhouette matches this sprite best: a coarse sweep around the
+    role's usual camera, then finer steps around the best. Returns the best and what the current camera gave."""
+    sil = sil or Silhouette(model)
+    t_mask = ref.rgba[..., 3] >= 128
+    centres, half, (p_lo, p_hi) = (search or SEARCH).get(ref.role, SEARCH["view"])
+    cur_yaw, cur_pitch = ref.camera(front_back_pitch, side_pitch)
+    fit_m = _fit_mode(sil, t_mask, cur_yaw if cur_yaw is not None else centres[0], cur_pitch, fit)
+    cache: dict[tuple[float, float], float] = {}
+
+    def score(yaw: float, pitch: float) -> float:
+        key = (round(yaw % 360.0, 2), round(pitch, 2))
+        if key not in cache:
+            cache[key] = _mask_iou(sil.mask(yaw, pitch), t_mask, fit_m)
+        return cache[key]
+
+    if cur_yaw is None:
+        before = max((score(c, cur_pitch), c) for c in centres)
+        before_iou, before_yaw = before
+    else:
+        before_iou, before_yaw = score(cur_yaw, cur_pitch), cur_yaw
+    ystep = 15.0 if half >= 90 else 5.0
+    pstep = 10.0 if half >= 90 else 5.0
+    cands = []
+    for c in centres:
+        for dy in np.arange(-half, half + 1e-6, ystep):
+            if half >= 180 and dy >= 180:
+                continue
+            for p in np.arange(p_lo, p_hi + 1e-6, pstep):
+                cands.append((score(c + dy, p), c + dy, p))
+    cands.sort(reverse=True)
+    best_s, best_y, best_p = cands[0]
+    for ys, ps in ((ystep / 2.5, pstep / 2.5), (1.0, 1.0)):
+        local = []
+        for dy in (-2 * ys, -ys, 0.0, ys, 2 * ys):
+            for dp in (-2 * ps, -ps, 0.0, ps, 2 * ps):
+                y, p = best_y + dy, min(p_hi, max(p_lo, best_p + dp))
+                if half < 180 and min(abs(((y - c + 180) % 360) - 180) for c in centres) > half + 1e-6:
+                    continue
+                local.append((score(y, p), y, p))
+        best_s, best_y, best_p = max(local + [(best_s, best_y, best_p)])
+    yaw = ((best_y + 180.0) % 360.0) - 180.0
+    return {"role": ref.role, "name": ref.name, "yaw": round(float(yaw), 1), "pitch": round(float(best_p), 1),
+            "iou": round(float(best_s), 3), "before": {"yaw": None if cur_yaw is None else round(float(before_yaw), 1),
+                                                       "pitch": round(float(cur_pitch), 1), "iou": round(float(before_iou), 3)},
+            "gain": round(float(best_s - before_iou), 3), "fit": fit_m}
+
+
+def calibrate(model: VoxelModel, refs: list[SpriteRef], front_back_pitch: float = FRONT_BACK_PITCH,
+              side_pitch: float = SIDE_PITCH, fit: str = "auto", search: Optional[dict] = None) -> list[dict[str, Any]]:
+    """:func:`calibrate_one` for every sprite (the model's silhouette points are computed once)."""
+    if model.count == 0:
+        return []
+    sil = Silhouette(model)
+    return [calibrate_one(model, r, front_back_pitch, side_pitch, fit, search, sil) for r in refs
+            if r.role in ("front", "back", "side", "view")]
+
+
+def apply_cameras(refs: list[SpriteRef], cams: list[dict[str, Any]], min_gain: float = 0.0) -> list[str]:
+    """Give each sprite its calibrated camera when it improves the match by at least ``min_gain`` (a sprite without a
+    known camera always takes it). Returns a line per change."""
+    changes = []
+    for ref, cam in zip([r for r in refs if r.role in ("front", "back", "side", "view")], cams):
+        if ref.yaw is None and ref.role == "view" or cam["gain"] >= min_gain:
+            moved = ref.yaw is None or abs(((cam["yaw"] - ref.yaw + 180) % 360) - 180) > 0.4 or ref.pitch is None \
+                or abs(cam["pitch"] - ref.pitch) > 0.4
+            ref.yaw, ref.pitch = cam["yaw"], cam["pitch"]
+            if moved:
+                changes.append(f"{ref.role} '{ref.name}': yaw {cam['yaw']:.0f}, {cam['pitch']:.0f} degrees above "
+                               f"(match {cam['before']['iou']:.2f} -> {cam['iou']:.2f})")
+    return changes
+
+
+def pitches(cams: list[dict[str, Any]]) -> dict[str, Optional[int]]:
+    """Settings that follow from a calibration: the front/back camera height (mean of the front and back sprites) and the
+    side camera height."""
+    fb = [c["pitch"] for c in cams if c["role"] in ("front", "back")]
+    sd = [c["pitch"] for c in cams if c["role"] == "side"]
+    return {"sprite_pitch": int(round(float(np.mean(fb)))) if fb else None,
+            "sprite_side_pitch": int(round(float(np.mean(sd)))) if sd else None}
 
 
 def _font(size: int = 13):
@@ -258,17 +455,20 @@ def sheet(matches: list[ViewMatch]) -> Image.Image:
     font = _font(13)
     head = 20
     rows = []
+    measure = ImageDraw.Draw(Image.new("RGBA", (4, 4)))
     for vm in matches:
-        w = sum(p.width for p in vm.panels) + 8 * (len(vm.panels) + 1)
+        labels = [f"{vm.role} sprite", f"model, camera {vm.pitch:.0f} deg above", f"match {vm.iou:.2f} (red missing, blue extra)"]
+        # each column as wide as its picture or its label, so small sprites do not overlap their labels
+        widths = [max(p.width, int(measure.textlength(t, font=font)) + 4) for p, t in zip(vm.panels, labels)]
+        w = sum(widths) + 8 * (len(vm.panels) + 1)
         h = max(p.height for p in vm.panels) + head + 8
         row = Image.new("RGBA", (w, h), BG_DARK)
         d = ImageDraw.Draw(row)
         x = 8
-        labels = [f"{vm.role} sprite", f"model, camera {vm.pitch:.0f} deg above", f"match {vm.iou:.2f} (red missing, blue extra)"]
-        for p, text in zip(vm.panels, labels):
+        for p, text, cw in zip(vm.panels, labels, widths):
             row.paste(p, (x, head))
             d.text((x, 3), text, fill=(235, 225, 200, 255), font=font)
-            x += p.width + 8
+            x += cw + 8
         rows.append(row)
     out = Image.new("RGBA", (max(r.width for r in rows), sum(r.height for r in rows)), (12, 10, 14, 255))
     y = 0
@@ -282,8 +482,12 @@ def mean_iou(matches: list[ViewMatch]) -> float:
     """Weighted mean silhouette match (the side, a true profile, counts double)."""
     if not matches:
         return 0.0
-    w = [WEIGHTS.get(m.role, 1.0) for m in matches]
-    return float(np.average([m.iou for m in matches], weights=w))
+    per_role: dict[str, int] = {}
+    for m in matches:
+        per_role[m.role] = per_role.get(m.role, 0) + 1
+    # a role's weight is shared by its sprites (two side sprites of a walk sheet weigh as much as one)
+    w = [WEIGHTS.get(m.role, 1.0) / per_role[m.role] for m in matches]
+    return float(np.average([m.score for m in matches], weights=w))
 
 
 def board(refs: list[SpriteRef], front_back_pitch: float = FRONT_BACK_PITCH, side_pitch: float = SIDE_PITCH,
@@ -293,9 +497,23 @@ def board(refs: list[SpriteRef], front_back_pitch: float = FRONT_BACK_PITCH, sid
     head = 20
     tiles = []
     for ref in refs:
-        pitch = side_pitch if ref.role == "side" else front_back_pitch
-        where = {"front": "facing the camera", "back": "from behind", "side": "from the side"}.get(ref.role, "")
-        tiles.append((f"{ref.role.upper()} sprite ({where}, camera {pitch:.0f} deg above)", _big(ref.rgba, zoom)))
+        yaw, pitch = ref.camera(front_back_pitch, side_pitch)
+        where = {"front": "facing the camera", "back": "from behind", "side": "from the side"}.get(
+            ref.role, f"from {yaw:.0f} deg around" if yaw is not None else "camera to be found")
+        main = _big(ref.rgba, zoom)
+        if ref.poses:
+            # the other frames of the walk under the main one, smaller
+            small = [_big(p, max(1, zoom // 2)) for p in ref.poses[:8]]
+            strip_w = sum(s.width for s in small) + 4 * (len(small) - 1)
+            tile = Image.new("RGBA", (max(main.width, strip_w), main.height + 18 + max(s.height for s in small)), BG_DARK)
+            tile.paste(main, (0, 0))
+            ImageDraw.Draw(tile).text((0, main.height + 2), f"{len(ref.poses)} more frames (poses):", fill=(200, 190, 170, 255), font=_font(11))
+            sx = 0
+            for s in small:
+                tile.paste(s, (sx, main.height + 18))
+                sx += s.width + 4
+            main = tile
+        tiles.append((f"{ref.role.upper()} sprite ({where}, camera {pitch:.0f} deg above)", main))
     w = sum(max(t.width, 8 * len(text)) for text, t in tiles) + 12 * (len(tiles) + 1)
     h = max(t.height for _, t in tiles) + head + 12
     out = Image.new("RGBA", (w, h), BG_DARK)
@@ -332,8 +550,8 @@ def grid_size(refs: list[SpriteRef], margin: int = 4) -> list[int]:
     exactly x), Y and Z from the side sprite (a true profile: columns are z, rows are y)."""
     side = _by_role(refs, "side")
     fb = [r for r in refs if r.role in ("front", "back")]
-    longest = max(max(r.rgba.shape[:2]) for r in refs)
-    x = max((r.rgba.shape[1] for r in fb), default=longest)
+    longest = max(max(max(a.shape[:2]) for a in [r.rgba] + list(r.poses)) for r in refs)
+    x = max((a.shape[1] for r in fb for a in [r.rgba] + list(r.poses)), default=longest)
     y = side.rgba.shape[0] if side is not None else longest
     z = side.rgba.shape[1] if side is not None else longest
     up = lambda v: int(min(128, max(16, -(-(v + 2 * margin) // 4) * 4)))
@@ -375,8 +593,9 @@ def program_data(refs: list[SpriteRef], size: list[int], front_back_pitch: float
     data: dict[str, Any] = {"palette": palette, "views": {}}
     for ref in refs:
         idx = _palette_index(ref.rgba, palette)
-        yaw = {"front": 0.0, "back": 180.0, "side": -90.0}.get(ref.role, 0.0)
-        pitch = side_pitch if ref.role == "side" else front_back_pitch
+        yaw, pitch = ref.camera(front_back_pitch, side_pitch)
+        if yaw is None:
+            yaw = -90.0 if ref.role == "side" else 0.0
         data["views"].setdefault(ref.role, {"idx": idx.tolist(), "yaw": yaw, "pitch": pitch, "name": ref.name})
     side = _by_role(refs, "side")
     if side is not None:

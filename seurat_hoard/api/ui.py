@@ -11,7 +11,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from ..agent_tools import TOOLS_BY_NAME, export_model
+from .. import lit, sheets
+from ..agent_tools import TOOLS_BY_NAME, export_model, round_model, spin_file
 from ..errors import SeuratError
 from ..exporters import FORMATS, from_vox, import_model
 from ..images import index_picture, thumbnail_png
@@ -117,11 +118,33 @@ def restore(request: Request, model_id: str, body: RestoreBody):
 
 
 @router.get("/api/models/{model_id}/render.png")
-def render_png(request: Request, model_id: str, view: str = "iso", size: Optional[int] = None, bg: str = "transparent"):
+def render_png(request: Request, model_id: str, view: str = "iso", size: Optional[int] = None, bg: str = "transparent",
+               yaw: Optional[float] = None, pitch: Optional[float] = None):
     m = services(request).store.get(model_id)
     if m.count == 0:
         raise SeuratError("invalid", "The model is empty.")
-    return Response(png_bytes(render(m, view, size=size, background=bg)), media_type="image/png", headers={"Cache-Control": "no-cache"})
+    size = max(1, min(int(size), 2048)) if size else None
+    return Response(png_bytes(render(m, view, size=size, background=bg, yaw=yaw, pitch=pitch)), media_type="image/png",
+                    headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/api/models/{model_id}/spin/{fmt}")
+def spin(request: Request, model_id: str, fmt: str, frames: int = 36, seconds: float = 3.0, pitch: float = 25.0, size: int = 384,
+         ground: bool = True, download: bool = True):
+    if fmt not in lit.SPIN_FORMATS:
+        raise SeuratError("invalid", f"Unknown animation format {fmt!r}; use gif or webm.")
+    data, filename = spin_file(services(request), model_id, fmt, max(8, min(frames, 120)), max(0.5, min(seconds, 20.0)),
+                               max(-10.0, min(pitch, 80.0)), max(96, min(size, 1024)), ground)
+    return _file(data, filename, lit.SPIN_FORMATS[fmt], download)
+
+
+@router.post("/api/models/{model_id}/calibrate")
+def calibrate(request: Request, model_id: str, body: dict[str, Any]):
+    res = tool(request, "model_sprite_calibrate", {**body, "model_id": model_id})
+    img = res.pop("_image", None)
+    if img:
+        res["image"] = f"data:{img['mime']};base64,{img['data']}"
+    return res
 
 
 @router.get("/api/models/{model_id}/export/{fmt}")
@@ -179,6 +202,20 @@ def reference_indexed(request: Request, ref_id: str, max_side: int = 32, colors:
     return Response(ix.preview_png(), media_type="image/png", headers={"Cache-Control": "no-cache"})
 
 
+@router.get("/api/references/{ref_id}/frames")
+def reference_frames(request: Request, ref_id: str, cols: int = 0, rows: int = 0):
+    res = tool(request, "reference_frames", {"reference_id": ref_id, "cols": max(0, min(cols, 64)), "rows": max(0, min(rows, 64))})
+    res.pop("_image", None)
+    return res
+
+
+@router.get("/api/references/{ref_id}/frames.png")
+def reference_frames_png(request: Request, ref_id: str, cols: int = 0, rows: int = 0, labels: bool = True):
+    sh = services(request).reference_sheet(ref_id, max(0, min(cols, 64)), max(0, min(rows, 64)))
+    img = sheets.contact(sh, sheets.guess_views(sh) if labels else None)
+    return Response(sheets.png_bytes(img), media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+
 @router.post("/api/references/{ref_id}/rename")
 def rename_reference(request: Request, ref_id: str, body: RenameBody):
     return services(request).store.rename_reference(ref_id, body.name)
@@ -213,6 +250,18 @@ def job(request: Request, job_id: str):
 @router.post("/api/jobs/{job_id}/cancel")
 def cancel(request: Request, job_id: str):
     return services(request).generator.cancel(job_id).to_dict()
+
+
+@router.get("/api/jobs/{job_id}/rounds/{rnd}/model")
+def round_voxels(request: Request, job_id: str, rnd: int):
+    """A round of a generation with its voxels, for the editor (not stored as a model)."""
+    model, out = round_model(services(request), job_id, rnd)
+    return {**model.to_dict(), **out, "id": "", "preview": True}
+
+
+@router.post("/api/jobs/{job_id}/rounds/{rnd}/save")
+def round_save(request: Request, job_id: str, rnd: int, body: Optional[dict[str, Any]] = None):
+    return tool(request, "generate_round", {"job_id": job_id, "round": rnd, "save": True, "name": str((body or {}).get("name") or "")[:120]})
 
 
 @router.get("/renders/{name}")

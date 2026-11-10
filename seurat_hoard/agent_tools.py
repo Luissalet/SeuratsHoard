@@ -10,7 +10,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from . import builders, spritecam
+from . import builders, lit, sheets, spritecam
 from .errors import SeuratError
 from .exporters import FORMATS, export, from_vox, import_model
 from .hoard_link.agentkit import Empty, Tool, ann
@@ -19,13 +19,16 @@ from .hoard_link.agentkit import tool_catalog as _catalog
 from .hoard_link.agentkit import uncapped  # noqa: F401 - re-exported for the UI routes
 from .images import index_picture, to_png
 from .render import VIEWS, png_bytes, render
+from .rounds import list_snapshots, load_snapshot
 from .services import Services
 from .voxels import OPS, norm_hex
 
 AGENT_INSTRUCTIONS = """Seurat's Hoard is a voxel studio: voxel models (a grid of palette colours, y up, z towards the viewer) that the user draws in a 3D editor, and pictures turned into voxel models.
 Pictures to voxels: reference_add (a PNG/JPG path on this PC, or base64) gives a reference id. build_from_image makes an instant model from it (inflate = puffed-up front, extrude = slab, hull = front + side silhouettes carved). generate_start asks the language model (DeepSeek on the Sparks by default, reasoning at length: minutes per round) for a real voxel version: it sees the pictures, sculpts the shape with operations, Seurat paints the pictures onto it, and it reviews its own renders for review rounds; with no pictures, a prompt and a size build an object or a whole scene from the description. Poll generate_status until done, then model_look.
 Editing: model_ops applies operations (voxel, voxels, box, line, sphere, cylinder, layer with pixel rows, recolor, mirror, move, clear; c is a palette index, c:0 erases); model_get shows the palette and bounds. Every change keeps the previous content as a version (model_versions / model_restore).
-model_look returns a picture of a model (sheet = six views, or one view). model_export writes .vox (MagicaVoxel), .glb, .stl (printing, millimetres) or PNG renders / isometric sprites and returns the path."""
+model_look returns a picture of a model (sheet = six views, or one view; lit views have real light: shadows, ambient occlusion, a ground; any yaw/pitch). model_export writes .vox (MagicaVoxel), .glb, .stl (printing, millimetres) or PNG renders / isometric sprites and returns the path; model_spin writes a turntable GIF or WebM.
+Sprite sheets and animations: reference_frames reads every frame of a GIF or every cell of a sheet and guesses which frames show which side (walk sheets: rows are directions, columns are steps); pass the reference with role sheet (or role front/back/side with frames) to generate_start or model_sprite_match and each side becomes a camera view, its other frames poses. model_sprite_calibrate finds the camera angles from which a model's silhouette matches each sprite (and can save them as settings); generations do it by themselves after the runs.
+Scenes: generate_start with method scene plans a big scene (up to 256 a side) as objects, builds each in its own program and places them. generate_round opens any round of a generation (its voxels are kept) and can save it as a model."""
 
 
 def _d(first: str, detail: str = "", synonyms: str = "") -> str:
@@ -56,8 +59,10 @@ class GetArgs(ModelId):
 
 
 class LookArgs(ModelId):
-    view: Literal[VIEWS] = Field("sheet", description="sheet (six labelled views) or one of front, back, left, right, top, bottom, iso, iso_front_left, iso_back_left, iso_back_right, or a game overworld camera (looking down): overworld_front, overworld_back (45 degrees above), overworld_left, overworld_right (true profile).")
-    size: Optional[int] = Field(None, ge=1, le=64, description="Pixels per voxel (flat views) or face size (isometric).")
+    view: Literal[VIEWS] = Field("sheet", description="sheet (six labelled views; sheet_lit with the two 3-D views lit) or one of front, back, left, right, top, bottom, iso, iso_front_left, iso_back_left, iso_back_right, a game overworld camera (looking down): overworld_front, overworld_back (45 degrees above), overworld_left, overworld_right (true profile), or a LIT view with real light (cast shadows, ambient occlusion, a ground): lit (front-right), lit_front_left, lit_back_left, lit_back_right, lit_front, lit_top.")
+    size: Optional[int] = Field(None, ge=1, le=2048, description="Pixels per voxel (flat views), face size (isometric) or the long side in pixels (lit views, default 640).")
+    yaw: Optional[float] = Field(None, ge=-360, le=360, description="Lit views: the camera's degrees around the model (0 = in front, 90 = from the right, 180 = behind).")
+    pitch: Optional[float] = Field(None, ge=-89, le=89, description="Lit views: the camera's degrees above the horizon.")
 
 
 class OpsArgs(ModelId):
@@ -138,9 +143,22 @@ class BuildArgs(BaseModel):
     name: str = Field("", max_length=120)
 
 
+class ViewSpec(BaseModel):
+    role: Literal["front", "back", "side", "view", "none"]
+    frames: list[int] = Field(default_factory=list, max_length=96, description="Frame numbers (reference_frames): the first is the main one, the rest poses.")
+    yaw: Optional[float] = Field(None, ge=-360, le=360)
+    pitch: Optional[float] = Field(None, ge=0, le=89)
+
+
 class RefRole(BaseModel):
     id: str
-    role: Literal["front", "side", "top", "back", "extra"] = "front"
+    role: Literal["front", "side", "top", "back", "extra", "sheet", "view"] = Field("front", description="What the picture shows. sheet = a sprite sheet or an animation: all its sides are read from its frames (views, or guessed: rows of a walk sheet are directions, columns are steps). view = a side whose camera is unknown (found by calibration).")
+    frames: list[int] = Field(default_factory=list, max_length=96, description="Use these frames of a sheet or animation (reference_frames numbers): the first is the main view, the rest poses of the same side. Empty: the whole picture (an animation: its standing frame, the others as poses).")
+    views: list[ViewSpec] = Field(default_factory=list, max_length=12, description="role sheet: which frames show which side; empty = guessed.")
+    cols: int = Field(0, ge=0, le=64, description="Sheets: columns of the grid (0 = found from the gaps).")
+    rows: int = Field(0, ge=0, le=64, description="Sheets: rows of the grid (0 = found from the gaps).")
+    yaw: Optional[float] = Field(None, ge=-360, le=360, description="The camera of this view when known (degrees around: 0 front, 90 right, 180 back).")
+    pitch: Optional[float] = Field(None, ge=0, le=89, description="The camera's degrees above the horizon when known.")
 
 
 class GenerateArgs(BaseModel):
@@ -153,12 +171,13 @@ class GenerateArgs(BaseModel):
     max_side: Optional[int] = Field(None, ge=4, le=128)
     colors: Optional[int] = Field(None, ge=2, le=48)
     depth: int = Field(0, ge=0, le=256)
-    size: Optional[list[int]] = Field(None, min_length=3, max_length=3, description="Grid [x, y, z] when there are no pictures; default from settings (new_size).")
+    size: Optional[list[int]] = Field(None, min_length=3, max_length=3, description="Grid [x, y, z] when there are no pictures; default from settings (new_size; scenes: scene_size, up to 256 a side).")
     effort: Optional[Literal["off", "low", "medium", "high", "max"]] = None
     use_model: bool = Field(True, description="false = only the starting model (no language model).")
     auto_paint: Optional[bool] = Field(None, description="Paint the reference pictures onto the sculpted shape after every round; default from settings.")
-    method: Optional[Literal["agent", "code", "ops", "parts"]] = Field(None, description="parts (the default when there is a side sprite): a character from its sprites part by part, the model decides what each part of the profile is (body, wings, legs, fan, the far wing only drawn for looks) and Seurat does the geometry; agent (default otherwise): the model runs, looks at and fixes its voxel program in a loop until it is done; code: fixed review rounds of programs; ops: JSON operations.")
-    steps: Optional[int] = Field(None, ge=2, le=60, description="agent: actions allowed (run, look, done); default from settings.")
+    method: Optional[Literal["agent", "code", "ops", "scene", "parts"]] = Field(None, description="parts (the default when there is a side sprite): a character from its sprites part by part, the model decides what each part of the profile is (body, wings, legs, fan, the far wing only drawn for looks) and Seurat does the geometry; agent (default otherwise): the model runs, looks at and fixes its voxel program in a loop until it is done; code: fixed review rounds of programs; ops: JSON operations; scene: a big scene by parts (the model plans objects, builds each in its own program, Seurat places them; rounds > 0 adds one layout check).")
+    steps: Optional[int] = Field(None, ge=2, le=60, description="agent: actions allowed (run, look, done); scene: actions per object; default from settings.")
+    calibrate: Optional[bool] = Field(None, description="Sprite target: find each sprite's camera from the model's silhouette after the runs (default from settings, on).")
     minutes: Optional[int] = Field(None, ge=5, le=600, description="agent: time budget; default from settings.")
     continue_from: str = Field("", max_length=64, description="agent: carry on from this model's voxel program and brief (e.g. a step of an earlier generation, restored first); new versions go to that model.")
     target: Literal["auto", "sprite", "free"] = Field("auto", description="code/agent: sprite = the front/back/side pictures are game sprites to rebuild in 3D (judged from the game camera after every run); free = pictures are loose hints; auto = sprite when they are small pixel art.")
@@ -168,16 +187,50 @@ class GenerateArgs(BaseModel):
 
 class SpriteRole(BaseModel):
     id: str
-    role: Literal["front", "back", "side"] = "front"
+    role: Literal["front", "back", "side", "view", "sheet"] = Field("front", description="front, back, side, view (camera unknown: found by calibration) or sheet (a sprite sheet or animation: its sides are read from its frames).")
+    frames: list[int] = Field(default_factory=list, max_length=96, description="Frames of a sheet/animation to use (first = main view, rest = poses).")
+    views: list[ViewSpec] = Field(default_factory=list, max_length=12, description="role sheet: which frames show which side; empty = guessed.")
+    cols: int = Field(0, ge=0, le=64)
+    rows: int = Field(0, ge=0, le=64)
+    yaw: Optional[float] = Field(None, ge=-360, le=360)
+    pitch: Optional[float] = Field(None, ge=0, le=89)
 
 
 ProgramArgs.model_rebuild()
 
 
 class SpriteMatchArgs(ModelId):
-    references: list[SpriteRole] = Field(..., min_length=1, max_length=6, description="The game sprites (reference ids) with what they show: front (facing the camera), back (from behind) or side.")
+    references: list[SpriteRole] = Field(..., min_length=1, max_length=6, description="The game sprites (reference ids) with what they show: front (facing the camera), back (from behind), side, view, or sheet (all the sides of a sprite sheet / animation).")
     sprite_pitch: Optional[int] = Field(None, ge=0, le=89, description="Degrees above the horizon of the camera of the front and back sprites; default from settings (45).")
     sprite_side_pitch: Optional[int] = Field(None, ge=0, le=89, description="Degrees above the horizon of the camera of the side sprites; default from settings (0: a true profile).")
+
+
+class CalibrateArgs(SpriteMatchArgs):
+    wide: bool = Field(True, description="true: search every plausible camera (front/back 0-80 degrees above, 20 around; free views all around); false: only near the current one (as generations do).")
+    apply: bool = Field(False, description="Save the front/back and side camera heights found as the settings sprite_pitch and sprite_side_pitch.")
+
+
+class FramesArgs(BaseModel):
+    reference_id: str = Field(..., min_length=1, max_length=64)
+    cols: int = Field(0, ge=0, le=64, description="Columns of the sheet's grid; 0 = found from the gaps between the sprites.")
+    rows: int = Field(0, ge=0, le=64, description="Rows of the sheet's grid; 0 = found from the gaps.")
+
+
+class SpinArgs(ModelId):
+    format: Literal["gif", "webm"] = Field("gif", description="gif (loops anywhere) or webm (VP9 video, smaller; needs ffmpeg).")
+    frames: int = Field(36, ge=8, le=120, description="Frames in one turn.")
+    seconds: float = Field(3.0, ge=0.5, le=20, description="Length of one turn.")
+    pitch: float = Field(25.0, ge=-10, le=80, description="Camera degrees above the horizon.")
+    size: int = Field(384, ge=96, le=1024, description="Width in pixels.")
+    ground: bool = Field(True, description="A ground under the model that catches its shadow.")
+    folder: str = Field("", max_length=500, description="Where to write; empty = data/exports.")
+
+
+class RoundArgs(BaseModel):
+    job_id: str = Field(..., min_length=1, max_length=64)
+    round: int = Field(..., ge=0, le=100000)
+    save: bool = Field(False, description="Save that round as a new model (to open and edit it); false = only look at it.")
+    name: str = Field("", max_length=120)
 
 
 class JobId(BaseModel):
@@ -202,6 +255,11 @@ class SettingsArgs(BaseModel):
     program_timeout_s: Optional[int] = Field(None, ge=5, le=600)
     sprite_pitch: Optional[int] = Field(None, ge=0, le=89, description="Sprite target: camera height (degrees) of front/back sprites.")
     sprite_side_pitch: Optional[int] = Field(None, ge=0, le=89, description="Sprite target: camera height (degrees) of side sprites.")
+    sprite_calibrate: Optional[bool] = Field(None, description="Sprite target: find each sprite's camera from the model's silhouette during generations.")
+    review_render: Optional[Literal["lit", "flat"]] = Field(None, description="The 3-D views of review sheets and looks: lit (shadows, ambient occlusion) or flat isometric.")
+    scene_steps: Optional[int] = Field(None, ge=2, le=30, description="Scenes by parts: agent actions per object.")
+    scene_objects: Optional[int] = Field(None, ge=1, le=16, description="Scenes by parts: most objects in a plan.")
+    scene_size: Optional[list[int]] = Field(None, min_length=3, max_length=3, description="Scenes by parts: default scene grid (16-256 a side).")
     parallel_jobs: Optional[int] = Field(None, ge=1, le=6, description="Generations at the same time (after a restart).")
     llm_url: Optional[str] = Field(None, max_length=300)
     llm_model: Optional[str] = Field(None, max_length=120)
@@ -222,21 +280,92 @@ def _look(svc: Services, a: LookArgs) -> dict[str, Any]:
     m = svc.store.get(a.model_id)
     if m.count == 0:
         raise SeuratError("invalid", "The model is empty.")
-    data = png_bytes(render(m, a.view, size=a.size, background="dark" if a.view != "sheet" else "transparent"))
+    data = png_bytes(render(m, a.view, size=a.size, background="dark" if not a.view.startswith("sheet") else "transparent",
+                            yaw=a.yaw, pitch=a.pitch))
     return {"id": m.id, "name": m.name, "view": a.view, "count": m.count, "size": m.size, "_image": _img(data)}
+
+
+def _sprite_refs(svc: Services, a: SpriteMatchArgs) -> tuple[list, float, float]:
+    refs = svc.sprite_refs([r.model_dump() for r in a.references])
+    if not refs:
+        raise SeuratError("invalid", "None of those pictures gives a front, back, side or view sprite.",
+                          "With role sheet, check reference_frames: its guessed views may all be 'none'; pass views.")
+    fb = float(a.sprite_pitch if a.sprite_pitch is not None else svc.settings["sprite_pitch"])
+    side = float(a.sprite_side_pitch if a.sprite_side_pitch is not None else svc.settings["sprite_side_pitch"])
+    return refs, fb, side
 
 
 def _sprite_match(svc: Services, a: SpriteMatchArgs) -> dict[str, Any]:
     m = svc.store.get(a.model_id)
     if m.count == 0:
         raise SeuratError("invalid", "The model is empty.")
-    refs = [spritecam.sprite_ref(r.role, svc.store.reference(r.id).get("name") or r.role, svc.store.reference_bytes(r.id))
-            for r in a.references]
-    fb = float(a.sprite_pitch if a.sprite_pitch is not None else svc.settings["sprite_pitch"])
-    side = float(a.sprite_side_pitch if a.sprite_side_pitch is not None else svc.settings["sprite_side_pitch"])
+    refs, fb, side = _sprite_refs(svc, a)
     matches = spritecam.match(m, refs, fb, side)
     return {"id": m.id, "name": m.name, "match": round(spritecam.mean_iou(matches), 3), "views": [v.to_dict() for v in matches],
             "summary": [v.summary() for v in matches], "_image": _img(png_bytes(spritecam.sheet(matches)))}
+
+
+def _calibrate(svc: Services, a: CalibrateArgs) -> dict[str, Any]:
+    m = svc.store.get(a.model_id)
+    if m.count == 0:
+        raise SeuratError("invalid", "The model is empty.")
+    refs, fb, side = _sprite_refs(svc, a)
+    before = spritecam.mean_iou(spritecam.match(m, refs, fb, side))
+    cams = spritecam.calibrate(m, refs, fb, side, search=None if a.wide else spritecam.SEARCH_GENERATION)
+    spritecam.apply_cameras(refs, cams, min_gain=-1.0)          # every sprite takes the best camera found
+    matches = spritecam.match(m, refs, fb, side)
+    suggested = spritecam.pitches(cams)
+    applied: dict[str, Any] = {}
+    if a.apply:
+        applied = {k: v for k, v in suggested.items() if v is not None}
+        if applied:
+            svc.settings.update(applied)
+    return {"id": m.id, "name": m.name, "cameras": cams, "match_before": round(before, 3),
+            "match": round(spritecam.mean_iou(matches), 3), "suggested_settings": suggested, "applied": applied,
+            "summary": [v.summary() for v in matches], "_image": _img(png_bytes(spritecam.sheet(matches)))}
+
+
+def _frames(svc: Services, a: FramesArgs) -> dict[str, Any]:
+    sh = svc.reference_sheet(a.reference_id, a.cols, a.rows)
+    views = sheets.guess_views(sh)
+    return {"reference_id": a.reference_id, **sh.to_dict(), "views": views,
+            "_image": _img(sheets.png_bytes(sheets.contact(sh, views)))}
+
+
+def spin_file(svc: Services, model_id: str, fmt: str, frames: int = 36, seconds: float = 3.0, pitch: float = 25.0,
+              size: int = 384, ground: bool = True) -> tuple[bytes, str]:
+    m = svc.store.get(model_id)
+    data = lit.spin(m, fmt, frames=frames, pitch=pitch, size=size, seconds=seconds, ground=ground)
+    return data, f"{safe_name(m.name)} giro.{fmt}"
+
+
+def _spin(svc: Services, a: SpinArgs) -> dict[str, Any]:
+    data, filename = spin_file(svc, a.model_id, a.format, a.frames, a.seconds, a.pitch, a.size, a.ground)
+    path = _exports_dir(svc, a.folder) / filename
+    path.write_bytes(data)
+    return {"path": str(path), "bytes": len(data), "format": a.format, "frames": a.frames, "mime": lit.SPIN_FORMATS[a.format]}
+
+
+def round_model(svc: Services, job_id: str, rnd: int, save: bool = False, name: str = "") -> tuple[Any, dict[str, Any]]:
+    """A round of a generation as a model (and, with ``save``, stored as a new one)."""
+    job = svc.generator.jobs.get(job_id)
+    base = (job.model_name if job and job.model_name else (job.params.get("name") if job else "")) or "Generación"
+    model = load_snapshot(svc.config.renders_dir, job_id, rnd, name or f"{base} (ronda {rnd})")
+    out: dict[str, Any] = {"job_id": job_id, "round": rnd, "name": model.name, "size": model.size, "count": model.count,
+                           "colors": len(model.palette), "rounds_with_voxels": list_snapshots(svc.config.renders_dir, job_id)}
+    if save:
+        model.id = svc.store.new_id()
+        model.source = {"kind": "round", "job": job_id, "round": rnd}
+        svc.store.save(model)
+        out["id"] = model.id
+    return model, out
+
+
+def _round(svc: Services, a: RoundArgs) -> dict[str, Any]:
+    model, out = round_model(svc, a.job_id, a.round, a.save, a.name)
+    if model.count:
+        out["_image"] = _img(png_bytes(render(model, "lit", size=640, background="dark")))
+    return out
 
 
 def _palette(svc: Services, a: PaletteArgs) -> dict[str, Any]:
@@ -433,11 +562,34 @@ TOOLS: list[Tool] = [
     Tool("generate_start", _d("Ask the language model (DeepSeek on the Sparks by default) for a voxel version of one or more "
                               "pictures, or of a description alone (objects, characters, whole scenes). It sees the pictures, sculpts the shape with operations (ellipsoids, capsules, wing prisms), Seurat paints the "
                               "pictures onto it, and it reviews its own renders. With effort max a round takes several minutes. Returns a job id.",
-                              "Roles: front (main), side (seen from the model's left), top, back, extra.",
+                              "Roles: front (main), side (seen from the model's left), top, back, extra; sheet (a sprite sheet or "
+                              "animation: every side it shows, its other frames as poses) and view (a side whose camera is found by "
+                              "calibration). method scene: a big scene planned as objects, each built in its own program and placed.",
                               "generar voxel, deepseek, versión voxel de una imagen"),
          GenerateArgs, ann(draft_safe=True), _generate, timeout_s=60),
     Tool("generate_status", _d("Progress of a generation: log, rounds (with notes and errors) and, when done, the model id."),
          JobId, ann(read_only=True), lambda s, a: s.generator.get(a.job_id).to_dict()),
+    Tool("generate_round", _d("Any round of a generation (its voxels are kept with its renders): returns a lit picture of it; "
+                              "save=true stores it as a new model to open and edit.",
+                              "Rounds are numbered as in generate_status (0 = the start or the scene plan).",
+                              "ronda intermedia, ver ronda en 3D, recuperar ronda"),
+         RoundArgs, ann(draft_safe=True), _round, timeout_s=120, capped=False),
+    Tool("reference_frames", _d("Every frame of an animated picture (GIF, animated WebP/PNG) or every cell of a sprite sheet "
+                                "(grid found from the gaps, or cols x rows), cut out, numbered, with a guess of which frames show "
+                                "which side (front, back, side; the first of each is the standing frame, the rest poses). Returns a "
+                                "numbered contact picture.",
+                                "Then use the reference in generate_start / model_sprite_match with role sheet (all sides) or with a "
+                                "role and frames.", "fotogramas, hoja de sprites, sprites de caminar, gif animado"),
+         FramesArgs, ann(read_only=True), _frames, timeout_s=120, capped=False),
+    Tool("model_sprite_calibrate", _d("Find the camera of each game sprite: the yaw and height from which the model's silhouette "
+                                      "matches it best (a sweep of angles, then finer steps), instead of the fixed 45/0 degrees. "
+                                      "Returns each camera, the match before and after and the comparison picture.",
+                                      "apply=true saves the front/back and side heights found as settings; generations calibrate by "
+                                      "themselves after their runs (setting sprite_calibrate).", "calibrar cámara, ángulo del sprite"),
+         CalibrateArgs, ann(read_only=False), _calibrate, timeout_s=300, capped=False),
+    Tool("model_spin", _d("Write a turntable animation of a model with real light (shadows, ambient occlusion, a ground): GIF or "
+                          "WebM. Returns the path.", synonyms="animación de giro, gif giratorio, webm, turntable"),
+         SpinArgs, ann(), _spin, timeout_s=300),
     Tool("generate_list", _d("Recent generations."), Empty, ann(read_only=True), lambda s, a: {"jobs": s.generator.list()}),
     Tool("generate_cancel", _d("Stop a generation (what it built so far is saved)."), JobId, ann(),
          lambda s, a: s.generator.cancel(a.job_id).to_dict()),

@@ -28,19 +28,23 @@ import numpy as np
 from . import builders
 from .errors import SeuratError
 from .hoard_link.ids import new_id
+from . import scene as scenes
 from . import spritecam
-from .images import Indexed, index_picture, is_sprite, to_png
+from .images import Indexed, index_picture, is_sprite_array, to_png
 from .llm import ModelClient, parse_json
 from .program import ProgramError, run_program
 from .palette import DEFAULT_PALETTE, merge
 from .render import ortho, png_bytes, render, sheet
+from .rounds import save_snapshot
 from .voxels import KEY_CHARS, MAX_SIDE, VoxelModel, apply_ops, norm_hex
 
 log = logging.getLogger("seurat.generate")
 
 ROLES = ("front", "side", "top", "back", "extra")
+#: roles a reference entry may have: the picture roles, a sheet/animation to read all its sides from, a free view
+ENTRY_ROLES = ROLES + ("sheet", "view")
 STARTS = ("auto", "inflate", "hull", "extrude", "empty", "current")
-METHODS = ("agent", "code", "ops")
+METHODS = ("agent", "code", "ops", "scene")
 
 OPS_GUIDE = """OPERATIONS (JSON objects, applied in order; c is a palette index, c:0 erases with the same shape):
 SHAPE (use these to build volumes; most models need only these):
@@ -109,7 +113,7 @@ PAINT_SELF = ("Colour comes after the shape: once the volume is right, use paint
               "and the details on the curved surface, and darker shades on the back and the underside.")
 
 REVIEW = """Review round {round} of {rounds}. The first picture(s) are the references (if any); the last picture is a
-contact sheet of the CURRENT model (front, left, top, back flat views and two isometric views; labels on each tile).
+contact sheet of the CURRENT model (front, left, top, back flat views and two 3-D views (lit: cast shadows and ambient occlusion); labels on each tile).
 
 Current model: size {size}, {count} voxels, bounds {bounds}.
 {guard}{silhouette}
@@ -242,7 +246,7 @@ edge). Use extra lighter/darker shades only where the sprite has them.
 After every run Seurat shows each sprite next to your model seen from the SAME camera at the sprite's resolution, and a
 silhouette diff (red: in the sprite but missing in your model; blue: your model has it but the sprite does not), with
 match scores. Drive them up: side 0.95 or better, front and back 0.85 or better, colours in the right places. The
-contact sheet after it shows the model from the usual flat and isometric views, to check it in 3D."""
+contact sheet after it shows the model from the usual flat and 3-D views, to check it in 3D."""
 
 SPRITE_BRIEF = """
 THE PICTURES ARE THE TARGET: they are game sprites of the subject. The SIDE sprite is a true profile (no camera angle):
@@ -253,8 +257,44 @@ must describe the 3D model that, seen from those cameras, looks like those sprit
 pose and colours, one voxel per sprite pixel. Use the pixel maps given (coordinates) to place every part in x, y and z.
 Other pictures (artwork) only help to understand the anatomy. Ignore the black outline."""
 
+SCENE_PLAN = """You are a voxel scene planner working inside Seurat's Hoard, a voxel studio. A big scene is built BY PARTS:
+you split it into objects, each object is then built by its own voxel program in its own small grid (at most 128 voxels
+a side), and Seurat places the finished objects into the scene grid. Plan it like a level designer.
+
+COORDINATES: the scene grid is [X, Y, Z]; x grows to the right, y grows UP (y = 0 is the floor), z grows TOWARDS the
+viewer. An object's position is the corner of its own grid with the lowest x, y and z, in scene voxels. Its rotation turns
+it around the vertical in quarter turns: 0 = its front faces +z (the viewer), 90 = +x, 180 = -z, 270 = -x; turned 90 or 270
+its x and z sizes swap in the scene.
+
+RULES
+- If the scene stands on terrain, a pavement or a floor, make ONE object with "ground": true: size [X, h, Z] with h at
+  most 12, position [0, 0, 0]. It is built first; every other object is SET DOWN on whatever is under it, so give them
+  y = 0 (or the height of the thing they stand on, for something on a table).
+- Every other object: its own size, as small as it can be while keeping its detail (each side 6 to 128), in scale with the
+  others (choose one scale for the whole scene, e.g. 1 voxel = 10 cm, and keep to it), and one or more placements.
+  Repeated objects (two benches, a row of trees) are ONE object with several placements, turned as needed.
+- Keep every object inside the scene, apart from the others unless they touch on purpose, and laid out so the scene reads
+  well from the front-right at about 30 degrees above.
+- Describe each object for its builder: what it is, its parts and their proportions, colours, style, which side is its
+  front.
+- At most {max} objects.
+
+ANSWER: ONE JSON object and nothing else:
+{"notes": "the layout and the scale in one or two sentences", "objects": [{"name": "...", "description": "...",
+"ground": false, "size": [x, y, z], "placements": [{"position": [x, y, z], "rotation": 0}]}]}"""
+
+SCENE_REVIEW = """You planned this scene and every object is now built and placed: "{prompt}", scene grid {size}.
+The FIRST picture is the scene lit, from the front-right; the SECOND is the scene from the top (the back of the scene at the
+top of the picture, x to the right).
+Placements now (objects other than the ground were set down on what is under them):
+{listing}
+Check the layout as a level designer: objects overlapping by mistake, floating, outside the scene, crowded or badly spaced,
+facing the wrong way, out of scale with each other. Answer ONE JSON object with only the placements to change:
+{{"notes": "...", "placements": [{{"name": "...", "index": 0, "position": [x, y, z], "rotation": 0}}]}}
+or {{"done": true, "notes": "why it is good"}} if the layout is right."""
+
 CODE_REVIEW = """Round {round} of {rounds}. Your previous program (below) built the model in the LAST picture: a contact
-sheet with flat views (front, left, top, back) and two isometric views. The other pictures are the references.
+sheet with flat views (front, left, top, back) and two 3-D views (lit: cast shadows and ambient occlusion). The other pictures are the references.
 Current model: grid {size}, {count} voxels, bounds {bounds}.
 {problem}
 Judge it as the subject itself, against the DESIGN BRIEF and the description (not by matching pictures pixel by pixel):
@@ -287,6 +327,8 @@ class Job:
     brief: str = ""                         # code method: the design brief written before the program
     sprites: list = field(default_factory=list)   # sprite target: spritecam.SpriteRef of the front/back/side sprites
     match: float = 0.0                      # sprite target: best mean silhouette match so far
+    cameras: list = field(default_factory=list)   # sprite target: the cameras calibration found (one per sprite)
+    parts: list = field(default_factory=list)     # scene: the planned objects and where they went
     created: float = field(default_factory=time.time)
     finished: float = 0.0
     cancel: threading.Event = field(default_factory=threading.Event)
@@ -300,6 +342,8 @@ class Job:
         return {"id": self.id, "status": self.status, "step": self.step, "log": self.log[-80:], "rounds": self.rounds,
                 "model_id": self.model_id, "model_name": self.model_name, "llm": self.llm, "error": self.error, "warning": self.warning, "brief": self.brief, "answers": self.answers,
                 "target": "sprite" if self.sprites else ("free" if self.status != "queued" else self.params.get("target") or "auto"), "match": round(self.match, 3),
+                "cameras": self.cameras, "parts": self.parts,
+                "sprites": [{"role": s.role, "name": s.name, "poses": len(s.poses), "yaw": s.yaw, "pitch": s.pitch} for s in self.sprites],
                 "created": self.created, "finished": self.finished,
                 "params": {k: v for k, v in self.params.items() if k != "images"}}
 
@@ -420,13 +464,20 @@ class Generator:
         job.say("leyendo las referencias")
         refs: dict[str, list[tuple[dict[str, Any], Indexed, bytes]]] = {}
         for r in p["references"]:
-            role = r.get("role") or "front"
+            if (r.get("role") or "front") not in ENTRY_ROLES:
+                raise SeuratError("invalid", f"Unknown role {r.get('role')!r}; use {', '.join(ENTRY_ROLES)}.")
+        # sheets and animations become one picture per side they show (the other frames of each side are poses)
+        expanded = self.svc.expand_references(p["references"])
+        for e in expanded:
+            role = "extra" if e["role"] == "view" else e["role"]
             if role not in ROLES:
-                raise SeuratError("invalid", f"Unknown role {role!r}; use {', '.join(ROLES)}.")
-            meta = self.svc.store.reference(r["id"])
-            raw = self.svc.store.reference_bytes(r["id"])
-            ix = index_picture(raw, max_side=max_side, colors=colors)
-            refs.setdefault(role, []).append((meta, ix, to_png(raw, 1024)))
+                continue
+            ix = index_picture(e["png"], max_side=max_side, colors=colors)
+            refs.setdefault(role, []).append((e["meta"], ix, to_png(e["png"], 1024)))
+        frames_used = [e for e in expanded if e.get("frames")]
+        if frames_used:
+            job.say("fotogramas: " + "; ".join(f"{e['role']} = {e['name']}" + (f" + {len(e['poses'])} poses" if e["poses"] else "")
+                                               for e in frames_used))
         if refs and "front" not in refs:
             first_role = next(iter(refs))
             refs["front"] = [refs[first_role].pop(0)]
@@ -440,12 +491,12 @@ class Generator:
             raise SeuratError("invalid", "target must be auto, sprite or free.")
         job.sprites = []
         if target != "free":
-            for r in p["references"]:
-                role = r.get("role") or "front"
-                if role in ("front", "back", "side"):
-                    raw = self.svc.store.reference_bytes(r["id"])
-                    if target == "sprite" or is_sprite(raw):
-                        job.sprites.append(spritecam.sprite_ref(role, self.svc.store.reference(r["id"]).get("name") or role, raw))
+            for e in expanded:
+                if e["role"] in ("front", "back", "side", "view") and (target == "sprite" or is_sprite_array(e["rgba"])):
+                    job.sprites.append(spritecam.SpriteRef(e["role"], e["name"], e["rgba"],
+                                                           yaw=None if e.get("yaw") is None else float(e["yaw"]),
+                                                           pitch=None if e.get("pitch") is None else float(e["pitch"]),
+                                                           poses=list(e["poses"])))
 
         # ---- palette: the reference colours, a darker shade of each, a few greys
         palette: list[str] = []
@@ -456,6 +507,11 @@ class Generator:
         method = p.get("method") or settings["method"]
         if method not in METHODS:
             raise SeuratError("invalid", f"method must be one of {', '.join(METHODS)}.")
+        if method == "scene":
+            if not use_model:
+                raise SeuratError("invalid", "A scene by parts needs the language model (use_model true).")
+            job.sprites = []
+            return self._scene_job(job, p, refs)
         if p.get("start") == "current" or not use_model:
             method = "ops"
         shades = []
@@ -579,12 +635,20 @@ class Generator:
         except OSError:
             pass
 
+    def review_sheet(self, model: VoxelModel, target: int = 900):
+        """The contact sheet the model reviews and the job shows: flat views plus two 3-D views, lit (cast shadows,
+        ambient occlusion) unless the setting review_render is flat."""
+        return sheet(model, target, lit=self.svc.settings["review_render"] == "lit")
+
     def _record(self, job: Job, rnd: int, notes: str, result: dict[str, Any], model: VoxelModel) -> None:
         name = f"{job.id}-r{rnd}.png"
         path = self.svc.config.renders_dir / name
         path.parent.mkdir(parents=True, exist_ok=True)
+        snap = ""
         if model.count:
-            path.write_bytes(png_bytes(sheet(model, 900)))
+            path.write_bytes(png_bytes(self.review_sheet(model, 900)))
+            # the round's voxels, so it can be opened in the 3-D editor later (rounds.py)
+            snap = save_snapshot(self.svc.config.renders_dir, job.id, rnd, model)
         matches = result.get("matches") or []
         sprite_name = ""
         if matches:
@@ -592,6 +656,7 @@ class Generator:
             (self.svc.config.renders_dir / sprite_name).write_bytes(png_bytes(spritecam.sheet(matches)))
         job.rounds.append({"round": rnd, "notes": notes, "applied": result.get("applied", 0), "errors": result.get("errors", [])[:12],
                            "count": model.count, "size": model.size, "render": name if model.count else "",
+                           **({"snapshot": snap} if snap else {}), **({"part": result["part"]} if result.get("part") else {}),
                            **({"sprite_render": sprite_name, "match": round(spritecam.mean_iou(matches), 3),
                                "views": [m.to_dict() for m in matches]} if matches else {})})
 
@@ -610,7 +675,7 @@ class Generator:
         text = self._first_prompt(model, refs, start, p)
         images = list(ref_images)
         if model.count:
-            images.append(png_bytes(sheet(model, 900)))
+            images.append(png_bytes(self.review_sheet(model, 900)))
         llm_name = ""
         total = 1 + rounds
         guard = ""
@@ -699,7 +764,7 @@ class Generator:
                                  guard=guard, silhouette=self._silhouette_report(model, refs) if refs else "", errors=self._errors_text(result),
                                  reference=reference, paint_rule=paint_rule)
             text += "\n\n" + OPS_GUIDE + "\n\nPalette (index: colour):\n" + self._palette_text(model)
-            images = list(ref_images) + ([png_bytes(sheet(model, 900))] if model.count else [])
+            images = list(ref_images) + ([png_bytes(self.review_sheet(model, 900))] if model.count else [])
         return llm_name
 
     def _code_rounds(self, job: Job, model: VoxelModel, refs: dict, rounds: int, p: dict[str, Any], ref_colors: list[str]) -> str:
@@ -823,7 +888,7 @@ class Generator:
                                       problem=(problem + ("\nThe program shown is your LAST ONE THAT WORKED; the model in the picture is its result." if problem and good_code else "")),
                                       code=(code if problem and code and not good_code else base))
             text = "\n".join(lines) + "\n\n" + text
-            images = list(ref_images) + ([png_bytes(sheet(model, 900))] if model.count else [])
+            images = list(ref_images) + ([png_bytes(self.review_sheet(model, 900))] if model.count else [])
         return llm_name
 
     def _write_brief(self, job: Job, client: ModelClient, lines: list[str], ref_images: list[bytes], effort, max_tokens: int,
@@ -873,6 +938,10 @@ class Generator:
         sprites = job.sprites
         fb_pitch = float(p.get("sprite_pitch") if p.get("sprite_pitch") is not None else settings["sprite_pitch"])
         side_pitch = float(p.get("sprite_side_pitch") if p.get("sprite_side_pitch") is not None else settings["sprite_side_pitch"])
+        calibrate = bool(settings["sprite_calibrate"] if p.get("calibrate") is None else p["calibrate"])
+        part = str(p.get("_part") or "")                  # scenes: the object this loop builds
+        base = int(p.get("_round_base") or 0)             # scenes: rounds of earlier objects come first
+        tag = f"{part}: " if part else ""
         system, brief_extra = AGENT_SYSTEM, ""
         if sprites:
             system = AGENT_SYSTEM + SPRITE_TARGET.format(fb=int(fb_pitch), side=int(side_pitch))
@@ -896,15 +965,24 @@ class Generator:
             for sp in sorted(sprites, key=lambda s: {"side": 0, "front": 1, "back": 2}.get(s.role, 3)):
                 h, w = sp.rgba.shape[:2]
                 head = f"\n{sp.role.upper()} sprite '{sp.name}', {w}x{h} pixels ('.' empty, '#' outline, letters = colours)"
-                if sp.role == "side" and sprite_data.get("side_place"):
+                if sp.role == "side" and sprite_data.get("side_place") and sprite_data["views"]["side"]["name"] == sp.name:
                     pl = sprite_data["side_place"]
                     head += (f". In your grid pixel (column c, row r) is the voxel column z = {pl['z0']} + c, y = "
                              f"{pl['y0'] + pl['h'] - 1} - r (that is the SIDE array). The subject faces +z (right in this map).")
+                elif sp.role == "side":
+                    head += ", the other side (the first side sprite is the SIDE array)."
+                elif sp.role == "view":
+                    head += (", the subject from another side (its camera is found from your model's silhouette after each run; "
+                             "it is judged like the others).")
                 else:
                     facing = "facing the camera" if sp.role == "front" else "from behind"
                     mirrored = "; seen from behind, so x grows to the LEFT" if sp.role == "back" else ""
                     head += (f", camera {int(fb_pitch)} degrees above, {facing}: column = x (one pixel per voxel{mirrored}; the "
                              "subject's centre column is the middle of the model), rows mix height and depth.")
+                if sp.poses:
+                    head += (f" It has {len(sp.poses)} more frames of the same side (steps of a walk or an animation, under it on "
+                             "the sprite board): they show how the legs, arms and tail move; build the neutral standing pose that "
+                             "sits between them, and they count in the score too.")
                 lines.append(head + ":\n" + spritecam.char_map(sp, pal))
         elif ref_colors:
             lines.append("Colours seen in the pictures (hints only): " + ", ".join(ref_colors[:24]))
@@ -915,6 +993,8 @@ class Generator:
             brief, llm_name, cancelled = str(model.source["brief"]), "", False
             job.brief = brief
             job.say("se continúa desde el programa y el brief del modelo")
+        elif p.get("_brief"):
+            brief, llm_name, cancelled = str(p["_brief"]), "", False      # a scene object: the plan is its brief
         else:
             brief, llm_name, cancelled = self._write_brief(job, client, lines, ref_images, effort, max_tokens, thinking_tokens,
                                                            timeout, extra=brief_extra)
@@ -938,7 +1018,7 @@ class Generator:
                           "current model" + (f" (mean silhouette match {score:.2f}):\n" + "\n".join(m.summary() + "\n" + spritecam.where(m, sprite_data, model.size) for m in matches)
                                              if sprites else "") + "\nThe pictures show it" + (" (sprite comparison, then contact sheet)" if sprites else "")
                           + ". Improve it: fix the worst views first and change a few things at a time.\n```python\n" + last_code + "\n```")
-            user_images = ([png_bytes(spritecam.sheet(matches))] if sprites else list(ref_images)) + [png_bytes(sheet(model, 1100))]
+            user_images = ([png_bytes(spritecam.sheet(matches))] if sprites else list(ref_images)) + [png_bytes(self.review_sheet(model, 1100))]
         for step in range(1, max_steps + 1):
             if job.cancel.is_set():
                 break
@@ -948,7 +1028,7 @@ class Generator:
                 break
             if step == max_steps or left < 300:
                 user_text += "\n\nThis is your LAST action: answer a final {\"action\": \"run\"} with your best complete program (or {\"action\": \"done\"} if the current model is already your best)."
-            label = f"paso {step} de {max_steps}"
+            label = f"{tag}paso {step} de {max_steps}"
 
             def progress(n_text: int, n_reason: int, label=label) -> None:
                 job.step = f"{label} · " + (f"pensando: {n_reason} tokens" if n_reason and not n_text else
@@ -960,7 +1040,7 @@ class Generator:
             llm_name = answer.model or llm_name
             if answer.finish == "cancelled":
                 break
-            self._save_answer(job, step, answer.text, suffix="-agent")
+            self._save_answer(job, base + step, answer.text, suffix="-agent")
             try:
                 data = parse_json(answer.text)
             except ValueError:
@@ -985,10 +1065,13 @@ class Generator:
             if action == "look":
                 view = str(data.get("view") or "iso")
                 view = view if view in ("iso", "iso_front_left", "iso_back_left", "iso_back_right", "front", "back", "left", "right", "top", "bottom",
-                                        "overworld_front", "overworld_back", "overworld_left", "overworld_right") else "iso"
+                                        "overworld_front", "overworld_back", "overworld_left", "overworld_right", "lit", "lit_front_left",
+                                        "lit_back_left", "lit_back_right", "lit_front", "lit_top") else "iso"
                 if not model.count:
                     user_text, user_images = "There is no model yet: run a program first.", []
                     continue
+                if settings["review_render"] == "lit" and view.startswith("iso"):
+                    view = {"iso": "lit"}.get(view, view.replace("iso_", "lit_"))      # the 3-D views with real light
                 img = png_bytes(render(model, view, size=None, background="dark"))
                 user_text, user_images = (f"The LAST picture is the current model from {view}"
                                           + (" (the others are the references again)" if ref_images else "") + ". Next action?"), list(ref_images) + [img]
@@ -1007,7 +1090,7 @@ class Generator:
                 user_text = (f"Back to your best version (match {best['score']:.2f}); edits now apply to its program:\n```python\n"
                              f"{last_code}\n```\n" + "\n".join(m.summary() + "\n" + spritecam.where(m, sprite_data, model.size) for m in matches)
                              + "\nNext action?")
-                user_images = [png_bytes(spritecam.sheet(matches)), png_bytes(sheet(model, 1100))]
+                user_images = [png_bytes(spritecam.sheet(matches)), png_bytes(self.review_sheet(model, 1100))]
                 continue
             edited = False
             if action == "edit":
@@ -1037,14 +1120,14 @@ class Generator:
                                           "code), edit (and edits), look (and a view), revert or done."), []
                 continue
             runs += 1
-            self._save_answer(job, step, code, suffix=".py")
+            self._save_answer(job, base + step, code, suffix=".py")
             if not edited:
                 history[-1]["content"] = json.dumps({"action": "run", "notes": notes, "code": code})
             try:
                 res = run_program(code, model.size, timeout=float(settings["program_timeout_s"]), sprites=sprite_data)
             except ProgramError as exc:
                 job.say(f"{label}: el programa falló ({exc.message[:160]})")
-                self._record(job, step, notes, {"applied": 0, "errors": [exc.message[:300]]}, model)
+                self._record(job, base + step, tag + notes, {"applied": 0, "errors": [exc.message[:300]], "part": part}, model)
                 user_text, user_images = (f"The program FAILED: {exc.message}\n{exc.trace}\nFix it and run again (the model shown "
                                           "before, if any, is unchanged" + ("; edits still apply to the program of the last version that ran"
                                                                            if edited else "") + ")."), []
@@ -1057,9 +1140,25 @@ class Generator:
             model.source = {**(model.source or {}), "program": code}
             last_code = code
             job.say(f"{label}: {res.count} voxels, {len(res.palette)} colores")
+            cam_text = ""
+            if sprites and calibrate and (runs == 1 or runs % 3 == 0 or any(s.role == "view" and s.yaw is None for s in sprites)):
+                # the cameras that drew the sprites, found from this model's silhouette (only within a narrow range while
+                # the model is being built, and only when a sprite matches clearly better from there)
+                cams = spritecam.calibrate(model, sprites, fb_pitch, side_pitch, search=spritecam.SEARCH_GENERATION)
+                changes = spritecam.apply_cameras(sprites, cams, min_gain=0.02)
+                if changes:
+                    job.cameras = [{"role": s.role, "name": s.name, "yaw": s.yaw, "pitch": s.pitch} for s in sprites]
+                    sprite_data = spritecam.program_data(sprites, model.size, fb_pitch, side_pitch)
+                    job.say(f"{label}: cámara calibrada — " + "; ".join(changes))
+                    cam_text = ("\nCAMERAS CALIBRATED from your model's silhouette (the scores, the sprite tools and paint_view now "
+                                "use them): " + "; ".join(changes) + ".")
+                    if best["grid"] is not None:                 # the best so far is judged again with the new cameras
+                        old = model.copy()
+                        old.grid, old.palette = best["grid"], list(best["palette"])
+                        best["score"] = spritecam.mean_iou(spritecam.match(old, sprites, fb_pitch, side_pitch))
             matches = spritecam.match(model, sprites, fb_pitch, side_pitch) if sprites else []
             score = spritecam.mean_iou(matches)
-            self._record(job, step, notes, {"applied": 1, "errors": [], "matches": matches}, model)
+            self._record(job, base + step, tag + notes, {"applied": 1, "errors": [], "matches": matches, "part": part}, model)
             if sprites:
                 job.say(f"{label}: coincidencia con los sprites {score:.2f} (" + ", ".join(f"{m.role} {m.iou:.2f}" for m in matches) + ")")
             if model.id and model.id != "tmp" and not p.get("into"):
@@ -1071,29 +1170,30 @@ class Generator:
             if sprites and score > best["score"] + 1e-6:
                 best.update(score=score, step=step, code=code, grid=model.grid.copy(), palette=list(model.palette))
             user_text = (f"It ran: {res.count} voxels, {len(res.palette)} colours, bounds {model.bounds()}. The LAST picture is a contact "
-                         "sheet of the model (front, left, top, back, two isometric views)"
+                         "sheet of the model (front, left, top, back, two 3-D views (lit: cast shadows and ambient occlusion))"
                          + ("; the pictures before it are the references again" if ref_images else "") + ". Be a harsh critic: compare "
                          "it with the references and the brief part by part (proportions, silhouette, pose, colours, the features that make "
                          "it recognisable) and list what is wrong before deciding. Next action: run an improved complete program, look "
                          "closer from a side, or done only if it is truly excellent.")
-            user_images = list(ref_images) + [png_bytes(sheet(model, 1100))]
+            user_images = list(ref_images) + [png_bytes(self.review_sheet(model, 1100))]
             if sprites:
                 user_text = (f"It ran: {res.count} voxels, {len(res.palette)} colours, bounds {model.bounds()}. Mean silhouette match "
                              f"{score:.2f}.\n" + "\n".join(m.summary() + "\n" + spritecam.where(m, sprite_data, model.size) for m in matches)
                              + "\nThe FIRST picture puts each sprite next to "
                              "your model seen from the same camera and the silhouette diff (red missing, blue extra); the SECOND is a "
-                             "contact sheet of the model (front, left, top, back, two isometric views). Be a harsh critic: go through "
+                             "contact sheet of the model (front, left, top, back, two 3-D views (lit: cast shadows and ambient occlusion)). Be a harsh critic: go through "
                              "each view, find which part of your model makes each red and blue area (remember the camera looks down: "
                              "lower in the front/back picture can mean nearer), and how the colours differ, and list what is wrong "
                              "before deciding. Next action: run an improved complete program, look closer (views include "
                              "overworld_front, overworld_back, overworld_left, overworld_right), or done only if every view matches.")
-                user_images = [png_bytes(spritecam.sheet(matches)), png_bytes(sheet(model, 1100))]
+                user_images = [png_bytes(spritecam.sheet(matches)), png_bytes(self.review_sheet(model, 1100))]
                 if best["step"] != step and best["score"] > score + 0.01:
                     user_text += (f"\nThis run is WORSE than your best so far (step {best['step']}, match {best['score']:.2f}). Unless this "
                                   "change is on its way to something better, go back to that program (it is in this conversation) "
                                   "and change less at a time.")
                 elif best["step"] == step:
                     user_text += "\nThis is your best version so far."
+            user_text += cam_text
             if edited:
                 user_text += "\nThe program after your edits (the next edits apply to it):\n```python\n" + code + "\n```"
         if not last_code and not model.count:
@@ -1104,9 +1204,183 @@ class Generator:
             model.source = {**(model.source or {}), "program": best["code"]}
             job.say(f"se queda la mejor versión: {'la de partida' if best['step'] == 0 else 'paso ' + str(best['step'])} "
                     f"(coincidencia {best['score']:.2f})")
-            self._record(job, len(job.rounds), "mejor versión", {"applied": 1, "errors": [],
-                                                                  "matches": spritecam.match(model, sprites, fb_pitch, side_pitch)}, model)
+            self._record(job, max((r["round"] for r in job.rounds), default=0) + 1, "mejor versión",
+                         {"applied": 1, "errors": [], "matches": spritecam.match(model, sprites, fb_pitch, side_pitch)}, model)
         return llm_name
+
+    # ------------------------------------------------------------------ scenes by parts
+    def _scene_job(self, job: Job, p: dict[str, Any], refs: dict) -> VoxelModel:
+        """A big scene in parts: the model plans it as objects (sizes, positions, turns; repeated objects placed several
+        times), each object is built by its own agent loop in its own grid, Seurat places them (set down on what is under
+        them) into one model, and the model checks the layout once from a lit view and the top."""
+        settings = self.svc.settings
+        client: ModelClient = self.svc.llm
+        effort = p.get("effort") or settings["effort"]
+        max_tokens, thinking_tokens = int(settings["max_tokens"]), int(settings["thinking_tokens"])
+        timeout = float(settings["timeout_s"])
+        size = [min(MAX_SIDE, max(16, int(v))) for v in (p.get("size") or settings["scene_size"])]
+        X, Y, Z = size
+        max_objects = int(settings["scene_objects"])
+        steps = int(p.get("steps") or settings["scene_steps"])
+        minutes = float(p.get("minutes") or settings["agent_minutes"])
+        rounds = max(0, int(p.get("rounds") if p.get("rounds") is not None else 1))
+        prompt = str(p.get("prompt") or "").strip()
+        ref_images = [img for role in ROLES for _, _, img in refs.get(role, [])][:3]
+        name = (p.get("name") or "").strip() or (prompt.split("\n")[0][:60] or "Escena")
+        started = time.time()
+
+        def progress(n_text: int, n_reason: int, label: str = "plan de la escena") -> None:
+            job.step = f"{label} · " + (f"pensando: {n_reason} tokens" if n_reason and not n_text else f"escribiendo: {n_text} tokens")
+
+        # ---- 1. the plan
+        job.say(f"el modelo planifica la escena por objetos ({X}x{Y}x{Z})")
+        text = (f"Plan this voxel scene: {prompt or 'a scene from the pictures'}\nScene grid: X={X}, Y={Y}, Z={Z} (each object's own "
+                f"grid at most {scenes.MAX_PART} a side; the ground may span the whole scene).")
+        if ref_images:
+            text += "\nThe pictures attached are references for the scene (hints for the look, not to trace)."
+        system = SCENE_PLAN.replace("{max}", str(max_objects))
+        answer = client.chat(system, text, ref_images, max_tokens=max_tokens, effort=effort, timeout=timeout, on_progress=progress,
+                             cancel=job.cancel, thinking_tokens=thinking_tokens)
+        if answer.finish == "cancelled" or job.cancel.is_set():
+            job.say("cancelado antes de construir nada: no se guarda ningún modelo")
+            return VoxelModel.empty("tmp", name, size)
+        llm_name = answer.model or ""
+        self._save_answer(job, 0, answer.text, suffix="-plan")
+        try:
+            data = parse_json(answer.text)
+        except ValueError:
+            again = client.chat(system, text + "\n\nYour previous answer was not valid JSON. Answer ONLY the JSON object.", ref_images,
+                                max_tokens=max_tokens, effort="off", timeout=timeout, cancel=job.cancel)
+            try:
+                data = parse_json(again.text)
+            except ValueError:
+                raise SeuratError("failed", "The model did not answer a valid scene plan.") from None
+        parts = scenes.parse_plan(data, size, max_objects)
+        notes = str(data.get("notes") or "").strip()
+        job.brief = (notes + "\n\n" if notes else "") + "\n".join(
+            f"- {pt.name}{' (suelo)' if pt.ground else ''}: {pt.size[0]}x{pt.size[1]}x{pt.size[2]}, "
+            + ", ".join(f"en {pl.position} giro {pl.rotation}" for pl in pt.placements) + f". {pt.description}" for pt in parts)
+        job.parts = [pt.to_dict(program=False) for pt in parts]
+        job.say(f"plan: {len(parts)} objetos, {sum(len(pt.placements) for pt in parts)} colocaciones")
+        boxes, box_pal = scenes.layout_boxes(size, parts)
+        preview = VoxelModel.empty("tmp", name, size, box_pal)
+        preview.grid = boxes
+        self._record(job, 0, "plan: " + ", ".join(pt.name for pt in parts), {"applied": 0, "errors": []}, preview)
+
+        # ---- 2. every object in its own grid, by its own agent loop
+        nxt = 1
+        comp: Optional[VoxelModel] = None
+        for i, pt in enumerate(parts):
+            if job.cancel.is_set():
+                break
+            left = minutes - (time.time() - started) / 60
+            share = max(3.0, left / max(1, len(parts) - i))
+            others = ", ".join(o.name for o in parts if o is not pt) or "nothing else"
+            sx, sy, sz = pt.size
+            ground_rule = (f"It is the GROUND of the whole scene: fill the whole X x Z footprint, keep it low (its top at most "
+                           f"{min(sy, 12)} voxels high, mostly flat, paths and details painted into its top), because every other "
+                           "object is set down on it." if pt.ground else
+                           "Stand it on y = 0, centred in x and z, filling most of its grid; its front faces +z.")
+            brief = (f"This is ONE OBJECT of a bigger voxel scene ({prompt}). The scene ({X}x{Y}x{Z}) also has: {others}. Build ONLY "
+                     f"'{pt.name}': {pt.description}\nIts own grid is X={sx}, Y={sy}, Z={sz}. {ground_rule} Seurat places it in the "
+                     "scene afterwards. Flat colours with lighter tops and darker undersides, solid volumes, clear details.")
+            job.say(f"objeto {i + 1} de {len(parts)}: {pt.name} ({sx}x{sy}x{sz})")
+            obj = VoxelModel.empty("tmp", pt.name, pt.size, DEFAULT_PALETTE)
+            sub = {"prompt": f"{pt.name}: {pt.description}", "steps": steps, "minutes": share, "effort": p.get("effort"),
+                   "_brief": brief, "_part": pt.name, "_round_base": nxt - 1}
+            try:
+                llm_name = self._agent_loop(job, obj, {}, sub, []) or llm_name
+            except SeuratError as exc:
+                if job.cancel.is_set():
+                    break
+                job.say(f"{pt.name}: falló ({exc.message[:160]}); la escena sigue sin él")
+                job.warning = (job.warning + " " if job.warning else "") + f"{pt.name}: {exc.message[:120]}"
+            if obj.count:
+                pt.grid, pt.palette = obj.grid.copy(), list(obj.palette)
+                pt.program = str((obj.source or {}).get("program") or "")
+            nxt = max((r["round"] for r in job.rounds), default=0) + 1
+            comp = self._compose_scene(job, name, size, parts, nxt, f"escena: {i + 1} de {len(parts)} objetos")
+            nxt += 1
+        built = [pt for pt in parts if pt.grid is not None]
+        if not built:
+            if job.cancel.is_set():
+                job.say("cancelado antes de construir nada: no se guarda ningún modelo")
+                return preview
+            raise SeuratError("failed", "No object of the scene was built.")
+        if comp is None:
+            comp = self._compose_scene(job, name, size, parts, nxt, "escena")
+
+        # ---- 3. the layout checked once from a lit view and the top
+        if rounds and not job.cancel.is_set() and len(built) > 1:
+            job.say("el modelo revisa la composición de la escena")
+            listing = "\n".join(f"- {pt.name} index {k}: position {pl.position}, rotation {pl.rotation}, size {pt.size}"
+                                + (" (ground)" if pt.ground else "") for pt in parts for k, pl in enumerate(pt.placements))
+            from .lit import lit as lit_view
+            imgs = [png_bytes(lit_view(comp, 45.0, 32.0, 900)), png_bytes(render(comp, "top", size=max(2, 640 // max(X, Z)), background="dark"))]
+            review = SCENE_REVIEW.format(size=size, listing=listing, prompt=prompt)
+            ans = client.chat(SCENE_PLAN.replace("{max}", str(max_objects)).split("ANSWER:")[0], review, imgs, max_tokens=max_tokens, effort=effort,
+                              timeout=timeout, on_progress=lambda a, b: progress(a, b, "revisión de la escena"), cancel=job.cancel,
+                              thinking_tokens=int(settings["agent_step_thinking"]))
+            self._save_answer(job, nxt, ans.text, suffix="-layout")
+            try:
+                fix = parse_json(ans.text)
+            except ValueError:
+                fix = {}
+            moved = 0
+            for ch in (fix.get("placements") or []) if isinstance(fix, dict) else []:
+                if not isinstance(ch, dict):
+                    continue
+                pt = next((q for q in parts if q.name == str(ch.get("name") or "")), None)
+                k = int(ch.get("index") or 0)
+                if pt is None or not 0 <= k < len(pt.placements):
+                    continue
+                pl = pt.placements[k]
+                # what changes the scene: x, z and the turn (y too for what is not set down on the ground)
+                where = lambda q: (q.position[0], q.position[2], q.rotation) + (() if q.settle else (q.position[1],))
+                before = where(pl)
+                try:
+                    if ch.get("position") is not None:
+                        pl.position = scenes._int3(ch["position"], "position")
+                    if ch.get("rotation") is not None:
+                        pl.rotation = int(round(float(ch["rotation"]) / 90.0)) * 90 % 360
+                except SeuratError:
+                    continue
+                moved += where(pl) != before                                # only real changes count
+            if moved:
+                job.say(f"revisión: {moved} colocaciones cambiadas" + (f" — {str(fix.get('notes'))[:160]}" if fix.get("notes") else ""))
+                comp = self._compose_scene(job, name, size, parts, nxt, "escena revisada: " + str(fix.get("notes") or "")[:200])
+            else:
+                job.say("revisión: la composición se queda como está" + (f" — {str(fix.get('notes'))[:160]}" if fix.get("notes") else ""))
+        job.parts = [pt.to_dict(program=False) for pt in parts]
+        job.llm = llm_name
+
+        # ---- 4. save
+        source = {"kind": "scene", "method": "scene", "prompt": prompt, "llm": llm_name, "job": job.id, "brief": job.brief,
+                  "references": [r["id"] for r in p.get("references") or []], "parts": [pt.to_dict() for pt in parts]}
+        into = p.get("into") or ""
+        if into:
+            target = self.svc.store.get(into)
+            target.grid, target.palette = comp.grid, comp.palette
+            target.source = source
+            saved = self.svc.store.save(target, version_note="before generation " + job.id)
+        else:
+            comp.id, comp.name, comp.source = self.svc.store.new_id(), name, source
+            saved = self.svc.store.save(comp)
+        job.model_id, job.model_name = saved.id, saved.name
+        job.say(f"guardado: {saved.name} ({saved.count} voxels, {len(built)} de {len(parts)} objetos)")
+        return saved
+
+    def _compose_scene(self, job: Job, name: str, size: list[int], parts: list, rnd: int, notes: str) -> VoxelModel:
+        grid, pal, report = scenes.compose(size, parts)
+        comp = VoxelModel.empty("tmp", name, size, pal or ["#ffffff"])
+        comp.grid = grid
+        problems = [f"{e['name']}: " + ("outside the scene" if e.get("outside") else f"{e['clipped']} voxels outside")
+                    for e in report if e.get("outside") or e.get("clipped")]
+        job.parts = [pt.to_dict(program=False) for pt in parts]
+        for pd, pt in zip(job.parts, parts):
+            pd["placed"] = [e for e in report if e["name"] == pt.name]
+        self._record(job, rnd, notes, {"applied": 1, "errors": problems, "part": "escena"}, comp)
+        return comp
 
     @staticmethod
     def _destructive(ops: list, before: int, after: int) -> str:

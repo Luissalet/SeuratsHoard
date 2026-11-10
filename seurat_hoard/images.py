@@ -158,6 +158,11 @@ def is_sprite(data: bytes, limit: int = 160) -> bool:
         arr = cutout(data)
     except SeuratError:
         return False
+    return is_sprite_array(arr, limit)
+
+
+def is_sprite_array(arr: np.ndarray, limit: int = 160) -> bool:
+    """:func:`is_sprite` for a picture already cut out (a frame of a sheet or an animation)."""
     return max(arr.shape[:2]) <= limit and _few_colors(arr)
 
 

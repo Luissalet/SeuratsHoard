@@ -85,7 +85,8 @@ row from the top): a rectangle [col0, row0, col1, row1] (inclusive) or a polygon
 only those colours inside it: a gold tail next to a red wing is easy that way. Shapes can be rough: Seurat snaps them
 to the sprite's patches of colour and its ink lines (a patch that is one part's but for a sliver goes to it whole), and
 pixels nobody takes join the neighbouring part. Where shapes overlap at their borders each patch stays with the part
-that has the rest of it; a shape drawn inside another one (a wing over a body given as one big rectangle) wins there.
+that has the rest of it; a shape drawn inside another one (a wing over a body given as one big rectangle) wins there;
+in a patch two parts share, a polygon or a shape with "colors" is taken at its word and two bare rectangles meet halfway.
 
 ACTIONS. Answer ONE JSON object each time:
 {"action": "build", "notes": "what you decided", "plan": {"facing": "right", "eye": [30, 9], "parts": [{"name": "body", "type": "solid",

@@ -39,8 +39,8 @@ images). Connector preset: its own `faustus-plugin.json`.
   (all solids are puffed up as one volume with circular sections scaled by `aspect` or to `width`, blended across joins),
   `fin` (`thickness`), `fan` (`base`, `width` or `spread`, `root`, `towards`, `rim`: rounded towards its upper and lower edges, by default over
   0.6 of its half thickness; flat end), `pair` (`offset`, `width` or
-  `thickness`, `lean`, `side` both/near/far), `wings` (flat sheets hinged at `root`: `out_up`, `out_back` (when neither is given `tune_wings` builds the part every 15 degrees from straight up to straight
-  back and keeps the opening with the best mean silhouette overlap with the front and back sprites; plans written by the
+  `thickness`, `lean`, `side` both/near/far), `wings` (flat sheets hinged at `root`: `out_up`, `out_back` (when neither is given `tune_wings` builds the part at 30, 45, 60 and 75 degrees from straight up
+  (straight up is a thin V, straight back a wall) and keeps the opening with the best mean silhouette overlap with the front and back sprites; plans written by the
   model never give them, except when carrying on with a request in words), `span`,
   `offset`, `thickness`), `decal` (exact pixels, shown only where the side cameras see), `skip` (not built; what lies
   under it is completed from the median parts). `far_copies`: inside a wings or pair part whose `far` is auto, a second

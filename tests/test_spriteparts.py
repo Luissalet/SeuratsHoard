@@ -286,10 +286,10 @@ def test_wings_open_the_way_the_other_sprites_say():
                               "parts": [{k: v for k, v in q.items() if k not in ("out_up", "out_back")} for q in PLAN["parts"]]})
     tuned = sp.tune_wings(p, free, sprites)
     wings = next(q for q in tuned["parts"] if q["type"] == "wings")
-    assert wings["opening"] in (0, 15, 30, 45, 60, 75, 90) and wings["out_up"] is not None
+    assert wings["opening"] in sp.WING_OPENINGS and wings["out_up"] is not None
     assert next(q for q in free["parts"] if q["type"] == "wings")["out_up"] is None          # the plan given is not touched
     scores = {}
-    for deg, (up, back) in ((0, (1.0, 0.0)), (90, (0.0, 1.0)), (wings["opening"], (wings["out_up"], wings["out_back"]))):
+    for deg, (up, back) in ((30, (0.866, 0.5)), (75, (0.259, 0.966)), (wings["opening"], (wings["out_up"], wings["out_back"]))):
         plan = sp.normalise_plan({**free, "parts": [dict(q, out_up=up, out_back=back) if q["type"] == "wings" else q for q in free["parts"]]})
         built = sp.build(p, plan)
         scores[deg] = sp.evaluate(built, sprites, sp.tune_camera(built, sprites))["views"]["back"]["iou"]

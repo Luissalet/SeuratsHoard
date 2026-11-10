@@ -17,8 +17,8 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
     perfil exacto del modelo (cada píxel es una columna de voxels) y un plan dice qué es cada parte a lo ancho del cuerpo:
     `solid` (sólido redondeado en el plano medio: cuerpo, cabeza, cola gruesa), `fin` (aleta fina), `fan` (abanico que se
     ensancha, redondeado hacia sus bordes; su extremo se pinta desde el sprite trasero), `pair` (par simétrico: patas, brazos, orejas), `wings` (dos
-    láminas planas que salen del cuerpo, con envergadura; cómo se abren lo busca Seurat probando de recto hacia arriba
-    a recto hacia atrás y quedándose con lo que mejor encaja con los sprites de frente y espalda), `decal` (marca solo en los flancos:
+    láminas planas que salen del cuerpo, con envergadura; cómo se abren lo busca Seurat probando entre recto hacia arriba
+    y recto hacia atrás (sin llegar a ninguno de los dos) y quedándose con lo que mejor encaja con los sprites de frente y espalda), `decal` (marca solo en los flancos:
     ojos) y `skip` (lo que el sprite lateral enseña solo por estética, como el ala de detrás asomando: no se construye,
     la cercana reflejada ya es la otra; dentro de unas alas o de un par Seurat la busca sola, otra zona de los mismos
     colores tras una línea propia, y `far: keep` la conserva). El plan dice dónde está el ojo (`eye`):

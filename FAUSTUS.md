@@ -33,7 +33,9 @@ images). Connector preset: its own `faustus-plugin.json`.
   `colors` as map letters or hex; `cells`; `except`): a cell that is one part's but for a sliver (60% its own and no
   other part taking more than 12% or 6 pixels) goes to it whole, a cell several parts really share is split along the
   shapes. Where shapes overlap, one lying mostly inside another wins there (a wing over a body drawn as one rectangle);
-  shapes that overlap only at their borders leave each cell with the part that has the rest of it (later part if both); lines and leftovers join their neighbours. Types: `solid`
+  shapes that overlap only at their borders leave each cell with the part that has the rest of it; in a cell both really
+  share, a polygon or a colour-filtered shape beats a bare rectangle (the later of two such wins) and two bare rectangles
+  meet halfway; lines and leftovers join their neighbours. Types: `solid`
   (all solids are puffed up as one volume with circular sections scaled by `aspect` or to `width`, blended across joins),
   `fin` (`thickness`), `fan` (`base`, `width` or `spread`, `root`, `towards`, `rim`: rounded towards its upper and lower edges, by default over
   0.6 of its half thickness; flat end), `pair` (`offset`, `width` or

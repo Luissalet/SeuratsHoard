@@ -288,6 +288,16 @@ def test_overlapping_shapes_follow_the_patches_of_colour():
     label = sp.assign(p, nested)
     assert (label[gold] == 1).all() and (label[red] == 2).all()
     assert (label[p.mask] > 0).all()
+    # one patch that two parts really share: rough rectangles meet halfway, a polygon is taken at its word
+    plain = Image.new("RGBA", (20, 10), (0, 0, 0, 0))
+    ImageDraw.Draw(plain).rectangle([0, 0, 19, 9], fill=RED + (255,), outline=INK + (255,))
+    q = sp.read_profile(np.asarray(plain).copy())
+    label = sp.assign(q, borders)
+    assert label[5, 8] == 1 and label[5, 11] == 2
+    drawn = sp.normalise_plan({"parts": [{"name": "a", "type": "solid", "where": [[0, 0, 12, 9]]},
+                                         {"name": "b", "type": "solid", "where": [{"poly": [[7, 0], [19, 0], [19, 9], [7, 9]]}]}]})
+    label = sp.assign(q, drawn)
+    assert label[5, 8] == 2 and label[5, 5] == 1
 
 
 def test_a_face_comes_from_the_front_sprite_when_it_shows_the_same_pose():

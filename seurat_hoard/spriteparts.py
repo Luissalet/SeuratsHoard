@@ -419,10 +419,13 @@ def _colour_set(p: Profile, spec: Any) -> Optional[np.ndarray]:
     return np.isin(p.idx, sorted(want))
 
 
-def _where_mask(p: Profile, part: dict[str, Any], key: str = "where") -> Optional[np.ndarray]:
+def _where_mask(p: Profile, part: dict[str, Any], key: str = "where", precise: bool = False,
+                geometry: bool = False) -> Optional[np.ndarray]:
     """The pixels a part asks for with its shapes, or None when it gives none. A shape is a rectangle
     [col0, row0, col1, row1], a polygon [[col, row], ...] or {"rect"|"poly": ..., "colors": ...} to take only some
-    colours inside it. Columns and rows are those of the side sprite as given (before any flip)."""
+    colours inside it. Columns and rows are those of the side sprite as given (before any flip). ``precise``: only the
+    deliberate shapes (polygons, shapes with a colour filter), not the bare rectangles. ``geometry``: the shapes as
+    drawn, whatever their colour filters."""
     h, w = p.shape
     shapes = part.get(key)
     if shapes is None:
@@ -453,7 +456,9 @@ def _where_mask(p: Profile, part: dict[str, Any], key: str = "where") -> Optiona
                 raise PlanError(f"part '{part['name']}': a polygon needs at least three [col, row] points")
             pts = [[(w - 1 - float(a)) if p.flipped else float(a), float(b)] for a, b in s]
             m = polygon_mask((h, w), pts)
-        if cf is not None:
+        if precise and cf is None and isinstance(s[0], (int, float)):
+            continue                 # a bare rectangle is a rough shape; polygons and colour filters are deliberate
+        if cf is not None and not geometry:
             m &= cf | p.ink          # lines inside the shape come along with the colours they separate
         out |= m
     return out
@@ -466,7 +471,8 @@ def assign(p: Profile, plan: dict[str, Any]) -> np.ndarray:
     only of some colours (``colors``). Shapes are rough: a cell that is one part's but for a sliver goes to it whole
     (colour changes and lines are the real borders); a cell that several shapes really share is split along them. Where
     shapes overlap, the one lying mostly inside the other wins; shapes that overlap only at their borders leave each
-    cell with the part that has the rest of it. A
+    cell with the part that has the rest of it, and in a cell both really share a polygon or a colour filter beats a bare
+    rectangle and two rectangles meet halfway. A
     decal is the exception: it is exactly the pixels of its shapes. What nobody asks for joins the neighbouring part
     (or the first solid)."""
     h, w = p.shape
@@ -474,6 +480,7 @@ def assign(p: Profile, plan: dict[str, Any]) -> np.ndarray:
     label = np.zeros((h, w), np.int32)
     ncell = int(p.cells.max())
     want = np.zeros((len(parts), h, w), bool)
+    exact = np.zeros((len(parts), h, w), bool)        # asked for with a deliberate shape, not a rough rectangle
     key_to_id = {c["key"]: c["id"] for c in p.info if c.get("key")}
     for k, part in enumerate(parts):
         spec = part.get("cells")
@@ -482,9 +489,13 @@ def assign(p: Profile, plan: dict[str, Any]) -> np.ndarray:
                 i = int(it) if isinstance(it, (int, np.integer)) or (isinstance(it, str) and it.isdigit()) else key_to_id.get(str(it), 0)
                 if 1 <= i <= ncell:
                     want[k] |= p.cells == i
+                    exact[k] |= p.cells == i
         m = _where_mask(p, part)
         if m is not None:
             want[k] |= m & p.mask
+            fine = _where_mask(p, part, precise=True)
+            if fine is not None:
+                exact[k] |= fine & p.mask
         elif part.get("colors") and spec is None:
             cf = _colour_set(p, part["colors"])
             if cf is not None:
@@ -494,12 +505,16 @@ def assign(p: Profile, plan: dict[str, Any]) -> np.ndarray:
             want[k] &= ~em
     core = p.cell_core
     normal = [k for k, part in enumerate(parts) if part["type"] != "decal"]
-    # Shapes are rough and overlap. A shape that lies mostly inside another one is the more specific of the two and
+    # Shapes are rough and overlap. A shape that lies inside another one is the more specific of the two and
     # wins there (a wing drawn over a body given as one big rectangle); shapes that only overlap at their borders
     # contest those pixels, and each patch of colour settles it.
-    area = {k: int(want[k].sum()) for k in normal}
+    geo = {}
+    for k in normal:
+        g = _where_mask(p, parts[k], geometry=True)
+        geo[k] = g if g is not None else want[k]
+    area = {k: int(geo[k].sum()) for k in normal}
     inside = {(k, j) for k in normal for j in normal
-              if k != j and area[k] and int((want[k] & want[j]).sum()) >= 0.5 * area[k]
+              if k != j and area[k] and int((geo[k] & geo[j]).sum()) >= 0.85 * area[k]
               and (area[k] < area[j] or (area[k] == area[j] and k > j))}
     owner = np.zeros((h, w), np.int32)            # part + 1 where one part has the pixel, -1 where several contest it
     claims = want[normal].sum(axis=0) if normal else np.zeros((h, w), np.int32)
@@ -523,9 +538,20 @@ def assign(p: Profile, plan: dict[str, Any]) -> np.ndarray:
             who = [k for k in normal if want[k, r, c]]
             who = [k for k in who if not any((j, k) in inside for j in who)] or who
             holders = [k for k in who if sure[k] >= big]
-            # the part that has the rest of the patch keeps this bit too; a patch they really share (or neither
-            # has) is cut along the shapes, the later one on top
-            piece[r, c] = (holders[0] if len(holders) == 1 else who[-1]) + 1
+            fine = [k for k in who if exact[k, r, c]]
+            # the part that has the rest of the patch keeps this bit too; in a patch they really share, a deliberate
+            # shape (a polygon, a colour filter) beats a rough rectangle (the later of two deliberate ones wins), and
+            # two rough rectangles meet halfway
+            if len(holders) == 1:
+                piece[r, c] = holders[0] + 1
+            elif fine:
+                piece[r, c] = fine[-1] + 1
+        if (piece == -1).any():
+            seeds = np.where(piece > 0, piece, 0)
+            near = grow_labels(seeds, cm & (piece != 0)) if seeds.any() else seeds
+            for r, c in zip(*np.nonzero(piece == -1)):
+                who = [k for k in normal if want[k, r, c]]
+                piece[r, c] = near[r, c] if near[r, c] - 1 in who else who[-1] + 1
         counts = np.bincount(piece[cm], minlength=len(parts) + 1)[1:]
         top = int(counts.argmax())
         others = np.delete(counts, top)

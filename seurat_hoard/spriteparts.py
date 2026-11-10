@@ -323,8 +323,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "solid": {"aspect": 1.0, "width": None, "paint": "auto"},
     "fin": {"thickness": 2},
     "fan": {"base": None, "spread": 0.5, "width": None, "root": None, "towards": None, "rim": None, "paint": "auto"},
-    "pair": {"offset": None, "aspect": 1.0, "width": None, "thickness": None, "lean": 0.0, "root": None, "side": "both"},
-    "wings": {"offset": None, "out_up": 0.5, "out_back": 1.0, "span": None, "thickness": 2, "root": None, "side": "both", "curl": 0.0},
+    "pair": {"offset": None, "aspect": 1.0, "width": None, "thickness": None, "lean": 0.0, "root": None, "side": "both", "far": "auto"},
+    "wings": {"offset": None, "out_up": 0.5, "out_back": 1.0, "span": None, "thickness": 2, "root": None, "side": "both", "curl": 0.0, "far": "auto"},
     "decal": {"side": "both"},
     "skip": {},
 }
@@ -367,6 +367,10 @@ def normalise_plan(plan: dict[str, Any]) -> dict[str, Any]:
                 val = str(val or "auto").lower()
                 if val not in PAINTS:
                     raise PlanError(f"part '{name}': paint must be one of {', '.join(PAINTS)}")
+            elif key == "far":
+                val = str(val or "auto").lower()
+                if val not in ("auto", "keep"):
+                    raise PlanError(f"part '{name}': far must be auto or keep")
             elif key == "side":
                 val = str(val or "both").lower()
                 if val not in ("both", "near", "far"):
@@ -541,6 +545,71 @@ def assign(p: Profile, plan: dict[str, Any]) -> np.ndarray:
     return label
 
 
+def far_copies(p: Profile, label: np.ndarray, parts: list[dict[str, Any]]) -> list[tuple[int, np.ndarray]]:
+    """Side sprites let the far wing, arm or leg peek out behind the near one, for looks. Inside a part that exists
+    twice (wings, pair) it shows as a second area of the same colours cut off from the main one by a line. Returns
+    [(part index, mask of what is taken for the far copy)] for the parts whose ``far`` is auto.
+
+    The near one is the bigger drawing: the area that, with the areas of other colours it carries (a rim, a
+    highlight), has most pixels. Another area of its colours with at least 0.3 of its size is the far copy, together
+    with the small areas and lines that hang only from it."""
+    out: list[tuple[int, np.ndarray]] = []
+    cls = None
+    for k, part in enumerate(parts):
+        if part["type"] not in ("wings", "pair") or str(part.get("far") or "auto") != "auto":
+            continue
+        m = label == k + 1
+        comp, n = components(m & ~p.ink)
+        if n < 2:
+            continue
+        if cls is None:
+            cls = families_of(p.rgba).classify(p.rgba)
+        sizes = np.bincount(comp.ravel(), minlength=n + 1)
+        sizes[0] = 0
+        dom = np.zeros(n + 1, np.int64)
+        for i in range(1, n + 1):
+            c = cls[comp == i]
+            c = c[c != Families.INK]
+            dom[i] = int(np.bincount(c).argmax()) if len(c) else -1
+        near = [None] + [_neigh4(_neigh4(comp == i)) | (comp == i) for i in range(1, n + 1)]
+        touch = np.zeros((n + 1, n + 1), bool)
+        for i in range(1, n + 1):
+            for j in np.unique(comp[near[i]]):
+                if j and j != i:
+                    touch[i, j] = touch[j, i] = True
+        big = [i for i in range(1, n + 1) if sizes[i] >= 6]
+        if len(big) < 2:
+            continue
+        score = {i: sizes[i] + sum(sizes[j] for j in range(1, n + 1) if touch[i, j] and dom[j] != dom[i]) for i in big}
+        main = max(big, key=lambda i: (score[i], sizes[i]))
+        cands = [i for i in big if i != main and dom[i] == dom[main] and sizes[i] >= max(12, 0.3 * sizes[main])]
+        if not cands:
+            continue
+        kept, far = {main}, set(cands)
+        rest = [i for i in range(1, n + 1) if i not in kept and i not in far]
+        changed = True
+        while changed and rest:
+            changed = False
+            for i in list(rest):
+                if any(touch[i, j] for j in kept):
+                    kept.add(i)
+                elif any(touch[i, j] for j in far):
+                    far.add(i)
+                else:
+                    continue
+                rest.remove(i)
+                changed = True
+        far_px = np.isin(comp, sorted(far))
+        keep_px = (comp > 0) & ~far_px
+        p8 = np.pad(keep_px, 1)
+        by_kept = (p8[:-2, :-2] | p8[:-2, 1:-1] | p8[:-2, 2:] | p8[1:-1, :-2] | p8[1:-1, 2:] | p8[2:, :-2] | p8[2:, 1:-1] | p8[2:, 2:])
+        # the line between the two is the near one's outline; lines that touch only the far copy go with it
+        lines = m & p.ink & ~by_kept
+        grown = grow_labels(np.where(far_px, 1, np.where(keep_px, 2, 0)).astype(np.int32), far_px | keep_px | lines)
+        out.append((k, far_px | (lines & (grown == 1))))
+    return out
+
+
 # ---------------------------------------------------------------------------------------------- building
 @dataclass
 class Built:
@@ -600,9 +669,17 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
     outline = outline or str(plan.get("outline") or "drop")
     h, w = p.shape
     parts = [dict(pt) for pt in plan["parts"]]
+    notes: list[str] = []
     if label is None:
         label = assign(p, plan)
-    notes: list[str] = []
+        for k, mask in far_copies(p, label, parts):
+            rs, cs = np.nonzero(mask)
+            parts.append({"name": f"{parts[k]['name']} (far)", "type": "skip", "auto": parts[k]["name"]})
+            label = label.copy()
+            label[mask] = len(parts)
+            notes.append(f"'{parts[k]['name']}': the area at columns {cs.min()}-{cs.max()}, rows {rs.min()}-{rs.max()} ({len(rs)} px) has the "
+                         f"same colours as the rest of it behind a line of its own: taken for the FAR one drawn behind the near one, "
+                         f"and not built (the mirrored near one is it). If it really belongs to the part, set \"far\": \"keep\" on '{parts[k]['name']}'.")
     masks = [label == k + 1 for k in range(len(parts))]
     for k, part in enumerate(parts):
         part["pixels"] = int(masks[k].sum())

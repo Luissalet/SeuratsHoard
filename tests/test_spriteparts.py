@@ -230,6 +230,25 @@ class PartsLink:
         return SimpleNamespace(text=json.dumps(answers[min(n, len(answers)) - 1]), model="deepseek-v4.1-flash")
 
 
+def test_the_far_wing_inside_a_wing_is_left_out_by_itself():
+    """One rough shape over both wings of the profile: the far one (same colours, behind a line of its own) is not
+    built unless the part says keep."""
+    p = sp.read_profile(bird_side())
+    parts = [dict(q) for q in PLAN["parts"] if q["name"] not in ("far wing", "wings")]
+    wing = {"name": "wings", "type": "wings", "where": [[8, 1, 21, 16]], "root": [15, 14], "span": 36}
+    built = sp.build(p, sp.normalise_plan({"facing": "right", "parts": parts[:1] + [wing] + parts[1:]}))
+    far = [q for q in built.parts if q.get("auto") == "wings"]
+    assert len(far) == 1 and far[0]["type"] == "skip" and far[0]["pixels"] >= 30
+    near = next(q for q in built.parts if q["name"] == "wings")
+    assert near["pixels"] >= 60 and any("FAR" in n for n in built.notes)
+    rs, cs = np.nonzero(built.label == built.parts.index(far[0]) + 1)
+    assert cs.min() >= 15 and rs.max() <= 13                                # the pale wing behind, not the near one
+    kept = sp.build(p, sp.normalise_plan({"facing": "right", "parts": parts[:1] + [dict(wing, far="keep")] + parts[1:]}))
+    assert not [q for q in kept.parts if q.get("auto")]
+    with pytest.raises(sp.PlanError):
+        sp.normalise_plan({"parts": [dict(wing, far="maybe")]})
+
+
 def test_overlapping_shapes_follow_the_patches_of_colour():
     """Rectangles written by a model overlap. A patch stays with the part that has the rest of it, and a shape lying
     inside another one wins there whatever the order."""

@@ -338,6 +338,11 @@ def normalise_plan(plan: dict[str, Any]) -> dict[str, Any]:
     for k in ("outline", "ink", "camera", "notes"):
         if k in plan:
             out[k] = plan[k]
+    if plan.get("eye") is not None:
+        try:
+            out["eye"] = [float(plan["eye"][0]), float(plan["eye"][1])]
+        except (TypeError, ValueError, IndexError):
+            raise PlanError('"eye" must be [column, row] of the side sprite') from None
     names = set()
     for i, raw in enumerate(plan["parts"]):
         if not isinstance(raw, dict):
@@ -545,6 +550,45 @@ def assign(p: Profile, plan: dict[str, Any]) -> np.ndarray:
     return label
 
 
+def _check_eye(p: Profile, plan: dict[str, Any], parts: list[dict[str, Any]], label: np.ndarray, notes: list[str]) -> None:
+    """The eye the plan points at must be in something that can be a head, at the end the character faces. A wing
+    read as the head is the costliest mistake a plan can make, and the eye settles it."""
+    eye = plan.get("eye")
+    if eye is None:
+        return
+    h, w = p.shape
+    c, r = int(round(eye[0])), int(round(eye[1]))
+    shown = f"[{c}, {r}]"
+    if p.flipped:
+        c = w - 1 - c
+    rs, cs = np.nonzero(p.mask)
+    i = int(np.argmin((rs - r) ** 2 + (cs - c) ** 2))
+    if (rs[i] - r) ** 2 + (cs[i] - c) ** 2 > 9:
+        raise PlanError(f'the eye at {shown} is not on the character: "eye" is [column, row] of the side sprite')
+    part = parts[int(label[rs[i], cs[i]]) - 1]
+    if part["type"] in ("wings", "fan", "fin", "skip"):
+        raise PlanError(f"the eye at {shown} lies in '{part['name']}', a part of type {part['type']}: the shape with the eye is the "
+                        f"HEAD (a solid), not a {part['type']}. Read the side sprite again from the head")
+    # the profile is stored facing right: the eye belongs in the front half
+    if cs[i] < 0.33 * (w - 1):
+        raise PlanError(f"the eye at {shown} is in the back third of a character said to face {plan.get('facing', 'right')}: either it faces "
+                        f"the other way or that is not the eye. The head is the shape with the eye, at the end it faces")
+    part["eye"] = shown
+    # an eye is drawn with something the rest of the part is not: another colour, or a dark spot that is not outline
+    cls = families_of(p.rgba).classify(p.rgba)
+    mine = (label == label[rs[i], cs[i]]) & ~p.ink
+    main = int(np.bincount(cls[mine]).argmax()) if mine.any() else -1
+    rr, cc = np.mgrid[0:h, 0:w]
+    near = p.mask & ((rr - rs[i]) ** 2 + (cc - cs[i]) ** 2 <= 5)
+    lab, _ = components(p.ink, conn8=True)
+    outline = np.isin(lab, np.unique(lab[p.rim & p.ink])) & p.ink
+    other = near & ~p.ink & (cls != main)
+    pupil = near & p.ink & ~outline
+    if not (other.any() or pupil.any()):
+        notes.append(f"nothing around the eye at {shown} looks like an eye (only the colours of '{part['name']}' and outline): "
+                     f"make sure that is the eye and that shape the head")
+
+
 def far_copies(p: Profile, label: np.ndarray, parts: list[dict[str, Any]]) -> list[tuple[int, np.ndarray]]:
     """Side sprites let the far wing, arm or leg peek out behind the near one, for looks. Inside a part that exists
     twice (wings, pair) it shows as a second area of the same colours cut off from the main one by a line. Returns
@@ -672,6 +716,7 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
     notes: list[str] = []
     if label is None:
         label = assign(p, plan)
+        _check_eye(p, plan, parts, label, notes)
         for k, mask in far_copies(p, label, parts):
             rs, cs = np.nonzero(mask)
             parts.append({"name": f"{parts[k]['name']} (far)", "type": "skip", "auto": parts[k]["name"]})

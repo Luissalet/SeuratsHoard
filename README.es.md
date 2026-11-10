@@ -20,7 +20,9 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
     láminas planas que salen del cuerpo, con envergadura y dirección de apertura), `decal` (marca solo en los flancos:
     ojos) y `skip` (lo que el sprite lateral enseña solo por estética, como el ala de detrás asomando: no se construye,
     la cercana reflejada ya es la otra; dentro de unas alas o de un par Seurat la busca sola, otra zona de los mismos
-    colores tras una línea propia, y `far: keep` la conserva). DeepSeek decide esa estructura y lee los anchos en los sprites de frente y
+    colores tras una línea propia, y `far: keep` la conserva). El plan dice dónde está el ojo (`eye`):
+    la forma que lo lleva es la cabeza, y Seurat rechaza un plan que lo ponga en un ala o en el extremo contrario al que
+    mira el personaje. DeepSeek decide esa estructura y lee los anchos en los sprites de frente y
     espalda; la geometría, los colores (el contorno negro desaparece y las líneas interiores se suavizan) y la
     comparación son de Seurat. Cuando el sprite de frente o el de espalda enseñan la misma pose que el modelo (personajes
     de pie, chibis), lo que mira a esa cámara se pinta con ese sprite: la cara de frente, el pelo o el dorso por detrás;

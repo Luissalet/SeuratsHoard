@@ -39,6 +39,16 @@ side, the model IS the side sprite. What a profile cannot say is how each part i
 That is your job: cut the side sprite into PARTS and say what each part is. Seurat does the geometry, keeps the sprite's
 colours, tones its ink lines down and mirrors everything left-right.
 
+READING THE SIDE SPRITE. Find the head before anything else; a wrong head ruins everything after it.
+- The head is the shape that carries the EYE (and the beak, mouth or snout), at the end the character faces. A shape
+  with no eye in it is not the head, however high it stands: it is a wing, a crest or the far wing.
+- Colours agree between sprites. What the front sprite has at its top centre is the head: the shape of the side sprite
+  with those colours and markings is the head. Do the same for the tail (bottom of the back sprite), the belly, the wings.
+- The tail is at the end opposite to the head; wings and arms rise from the back or shoulders, between the two; legs
+  hang under the body.
+The plan says where the eye is: "eye": [column, row] of the side sprite. Seurat checks that it lies in a part that can
+be a head, on the side the plan says the character faces.
+
 PART TYPES
 - "solid": on the middle line of the body, puffed up round: body, head, neck, snout, beak, a thick tail, a bushy crest.
   "width": how wide it is across at its widest, in voxels (= pixels of the front and back sprites). Without width it is
@@ -73,15 +83,17 @@ WHERE A PART IS. "where": a list of shapes in SIDE-sprite pixels, numbered as in
 row from the top): a rectangle [col0, row0, col1, row1] (inclusive) or a polygon {"poly": [[col, row], ...]}. Add
 "colors" (letters of the pixel map, e.g. "bc") to a part, or to one shape as {"rect": [...], "colors": "bc"}, to take
 only those colours inside it: a gold tail next to a red wing is easy that way. Shapes can be rough: Seurat snaps them
-to the sprite's patches of colour and its ink lines (a patch mostly inside one part's shapes goes to it whole), and
-pixels nobody takes join the neighbouring part. Where shapes of two parts overlap the later part wins.
+to the sprite's patches of colour and its ink lines (a patch that is one part's but for a sliver goes to it whole), and
+pixels nobody takes join the neighbouring part. Where shapes overlap at their borders each patch stays with the part
+that has the rest of it; a shape drawn inside another one (a wing over a body given as one big rectangle) wins there.
 
 ACTIONS. Answer ONE JSON object each time:
-{"action": "build", "notes": "what you decided", "plan": {"facing": "right", "parts": [{"name": "body", "type": "solid",
+{"action": "build", "notes": "what you decided", "plan": {"facing": "right", "eye": [30, 9], "parts": [{"name": "body", "type": "solid",
  "where": [[10, 12, 24, 30]], "width": 12}, ...]}}       ("facing": where the head points in the side sprite)
 {"action": "adjust", "notes": "...", "set": {"wings": {"span": 44, "out_up": 0.8}, "body": {"width": 14}},
  "add": [{...a whole part...}], "remove": ["name"]}        changes the last plan and rebuilds; give "where" again to
-                                                            reshape a part; a part added with an existing name replaces it
+                                                            reshape a part; a part added with an existing name replaces it;
+                                                            "eye": [column, row] beside "set" moves the eye
 {"action": "look", "view": "front_right" | "front_left" | "back_left" | "back_right" | "front" | "back" | "side" | "top"}
 {"action": "done", "notes": "why it is finished"}
 
@@ -118,8 +130,8 @@ SIDE sprite, {sw}x{sh} pixels. This is the profile you cut into parts; columns a
 WHAT THE OTHER SPRITES SAY ABOUT WIDTHS (use them for width, span, offset):
 {measures}
 
-You have up to {steps} actions and about {minutes} minutes. Think the anatomy through first: which pixels are the body,
-the head, each limb; which limb is the far copy drawn for looks; how wide each part is in the front and back sprites;
+You have up to {steps} actions and about {minutes} minutes. Think the anatomy through first: where the eye is and so
+which shape is the head; which pixels are the body, each limb; which limb is the far copy drawn for looks; how wide each part is in the front and back sprites;
 how the wings leave the body. Then answer a first complete plan with action build."""
 
 AFTER = """Built: {count} voxels in a grid of {size}.
@@ -518,7 +530,7 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
         action = str(data.get("action") or ("build" if isinstance(data.get("plan"), dict) else "")).lower()
         notes = str(data.get("notes") or "")[:600]
         history.append({"role": "user", "content": gen._content(user_text, user_images)})
-        history.append({"role": "assistant", "content": json.dumps({k: data.get(k) for k in ("action", "notes", "plan", "set", "add", "remove", "view")
+        history.append({"role": "assistant", "content": json.dumps({k: data.get(k) for k in ("action", "notes", "plan", "set", "add", "remove", "eye", "view")
                                                                     if data.get(k) is not None}, ensure_ascii=False)})
         for msg in history[:-2]:                      # old pictures are dropped, the words stay
             if isinstance(msg.get("content"), list):
@@ -550,6 +562,8 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
             except sp.PlanError as exc:
                 user_text, user_images = f"The adjust was NOT applied: {exc}. Nothing changed. Next action?", []
                 continue
+            if isinstance(data.get("eye"), list):
+                plan = dict(plan, eye=data["eye"])
         elif action == "build" and isinstance(data.get("plan"), dict):
             plan = data["plan"]
         else:
@@ -569,6 +583,9 @@ def _loop(gen: Any, job: Any, model: VoxelModel, sprites: dict[str, np.ndarray],
                           for r, v in state["views"].items()) or "no front or back sprite to compare with"
         user_text = AFTER.format(count=model.count, size=model.size, report=sp.report(built), match=match,
                                  views="front right, back left, front, back, side and top")
+        if not (state["plan"] or {}).get("eye"):
+            user_text += ('\nThe plan has no "eye": add "eye": [column, row] (where the eye is in the side sprite) with your next build so '
+                          "Seurat can check the head.")
         user_text += "\nThe plan as built:\n" + json.dumps(_plan_text(state["plan"]), ensure_ascii=False)
         user_images = [b for b in state["pics"] if b]
     return llm_name

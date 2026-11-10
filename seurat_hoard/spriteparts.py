@@ -317,6 +317,7 @@ def colour_map(p: Profile) -> str:
 
 # ---------------------------------------------------------------------------------------------- the plan
 PAINTS = ("auto", "none", "front", "back", "both")
+WING_OPENINGS = (30, 45, 60, 75)   # degrees from straight up tried by tune_wings: straight up is a thin V, straight back a wall
 WING_OPENING = (0.5, 0.87)   # out_up, out_back of a wing nobody described: raised a little, its face to the front and back cameras
 FACE_IOU = 0.82       # a front or back sprite this close to the model's own silhouette is a picture of the same pose
 
@@ -1437,9 +1438,9 @@ def tune_camera(built: Built, sprites: dict[str, np.ndarray], fam: Optional[Fami
 
 def tune_wings(p: Profile, plan: dict[str, Any], sprites: dict[str, np.ndarray], fam: Optional[Families] = None) -> dict[str, Any]:
     """How the wings open, when the plan does not say: a flat sheet can leave the body anywhere between straight up
-    (a thin V seen from the front) and straight back (its whole face to the front and back cameras). Each wings part
-    without out_up / out_back is built every 15 degrees between the two and keeps the opening whose front and back
-    views overlap those sprites best. Returns the plan to build (a copy with the openings found; the plan given is
+    (a thin V seen from the front) and straight back (a wall with its whole face to the front and back cameras). Each
+    wings part without out_up / out_back is built every 15 degrees between the two, short of both ends, and keeps the
+    opening whose front and back views overlap those sprites best. Returns the plan to build (a copy with the openings found; the plan given is
     not changed, so it is tuned again when something else moves)."""
     import copy
     import math
@@ -1450,7 +1451,7 @@ def tune_wings(p: Profile, plan: dict[str, Any], sprites: dict[str, np.ndarray],
     plan = copy.deepcopy(plan)
     for k in todo:
         best = (-1.0, WING_OPENING, 60)
-        for deg in (0, 15, 30, 45, 60, 75, 90):
+        for deg in WING_OPENINGS:
             up, back = round(math.cos(math.radians(deg)), 3), round(math.sin(math.radians(deg)), 3)
             plan["parts"][k]["out_up"], plan["parts"][k]["out_back"] = up, back
             try:

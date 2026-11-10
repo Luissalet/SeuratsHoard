@@ -357,6 +357,7 @@ def test_sprite_target_judges_runs_from_the_game_camera(tmp_path):
         after_run = link.calls[2]["messages"][-1]["content"]
         text = after_run[0]["text"] if isinstance(after_run, list) else after_run
         assert "silhouette match" in text and "FRONT sprite" in text and "SIDE sprite" in text
+        assert "px at" in text                                          # where each view differs, in numbers
         assert len(link.calls[2]["images"]) == 2                      # sprite comparison + contact sheet
         good = [r for r in st["rounds"] if r.get("sprite_render")]
         assert good and len(good[0]["views"]) == 3 and (cfg.data_dir / "renders" / good[0]["sprite_render"]).exists()

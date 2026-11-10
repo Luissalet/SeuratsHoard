@@ -52,6 +52,8 @@ class ViewMatch:
     fit: str = "pixel"             # pixel: one voxel per sprite pixel; area: scaled to the sprite
     size_ratio: tuple = (1.0, 1.0)  # model width and height from that camera / the sprite's (pixel fit: 1 = right size)
     panels: list[Image.Image] = field(default_factory=list)
+    missing_mask: Optional[np.ndarray] = None     # (h, w) sprite pixels the model does not cover
+    extra_mask: Optional[np.ndarray] = None       # (h, w) model pixels outside the sprite
 
     def summary(self) -> str:
         where = {"front": "in front", "back": "behind", "side": "at the side"}.get(self.role, self.role)
@@ -221,6 +223,7 @@ def match_view(model: VoxelModel, ref: SpriteRef, yaw: float, pitch: float, fit:
     diff[t_mask & ~m_mask] = (235, 60, 50, 255)
     diff[m_mask & ~t_mask] = (60, 120, 240, 255)
     vm.panels = [_big(t), _big(m), _big(diff)]
+    vm.missing_mask, vm.extra_mask = t_mask & ~m_mask, m_mask & ~t_mask
     return vm
 
 
@@ -404,4 +407,60 @@ def char_map(ref: SpriteRef, palette: list[str]) -> str:
     for r in range(h):
         line = "".join("." if idx[r, c] == 0 else "#" if dark[r, c] else keys[(idx[r, c] - 1) % len(keys)] for c in range(w))
         lines.append(f"{r:4d} {line}")
+    return "\n".join(lines)
+
+
+def _components(mask: np.ndarray, min_px: int = 4) -> list[tuple[int, int, int, int, int]]:
+    """Connected areas of ``mask`` (4-neighbour) as (pixels, col0, col1, row0, row1), biggest first."""
+    seen = np.zeros_like(mask, bool)
+    h, w = mask.shape
+    out = []
+    for r0, c0 in zip(*np.nonzero(mask)):
+        if seen[r0, c0]:
+            continue
+        stack, px = [(r0, c0)], []
+        seen[r0, c0] = True
+        while stack:
+            r, c = stack.pop()
+            px.append((r, c))
+            for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                rr, cc = r + dr, c + dc
+                if 0 <= rr < h and 0 <= cc < w and mask[rr, cc] and not seen[rr, cc]:
+                    seen[rr, cc] = True
+                    stack.append((rr, cc))
+        if len(px) >= min_px:
+            rs, cs = [p[0] for p in px], [p[1] for p in px]
+            out.append((len(px), min(cs), max(cs), min(rs), max(rs)))
+    return sorted(out, reverse=True)
+
+
+def where(vm: ViewMatch, data: Optional[dict] = None, size: Optional[list[int]] = None, limit: int = 5) -> str:
+    """The biggest missing and extra areas of a view in numbers the program can use: for the side sprite (a true
+    profile placed as SIDE) in grid z and y; for front and back in grid x (their horizontal axis) and sprite rows."""
+    if vm.missing_mask is None:
+        return ""
+    lines = []
+    place = (data or {}).get("side_place")
+    X = (size or [0])[0]
+    h, w = vm.missing_mask.shape
+    for label, mask in (("missing (red)", vm.missing_mask), ("extra (blue)", vm.extra_mask)):
+        comps = _components(mask)[:limit]
+        if not comps:
+            continue
+        parts = []
+        for n, c0, c1, r0, r1 in comps:
+            if vm.role == "side" and place:
+                z0, z1 = place["z0"] + c0, place["z0"] + c1
+                ytop = place["y0"] + place["h"] - 1
+                parts.append(f"{n} px at z {z0}-{z1}, y {ytop - r1}-{ytop - r0}")
+            elif vm.role in ("front", "back") and X:
+                centre = (w - 1) / 2
+                if vm.role == "front":
+                    x0, x1 = X / 2 + (c0 - centre), X / 2 + (c1 - centre)
+                else:                                    # seen from behind: x grows to the left
+                    x0, x1 = X / 2 - (c1 - centre), X / 2 - (c0 - centre)
+                parts.append(f"{n} px at x {max(0, int(round(x0)))}-{min(X - 1, int(round(x1)))}, sprite rows {r0}-{r1} (from the top)")
+            else:
+                parts.append(f"{n} px at sprite columns {c0}-{c1}, rows {r0}-{r1}")
+        lines.append(f"  {label}: " + "; ".join(parts))
     return "\n".join(lines)

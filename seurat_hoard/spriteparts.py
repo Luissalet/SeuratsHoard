@@ -317,6 +317,7 @@ def colour_map(p: Profile) -> str:
 
 # ---------------------------------------------------------------------------------------------- the plan
 PAINTS = ("auto", "none", "front", "back", "both")
+WING_OPENING = (0.5, 0.87)   # out_up, out_back of a wing nobody described: raised a little, its face to the front and back cameras
 FACE_IOU = 0.82       # a front or back sprite this close to the model's own silhouette is a picture of the same pose
 
 DEFAULTS: dict[str, dict[str, Any]] = {
@@ -324,7 +325,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "fin": {"thickness": 2},
     "fan": {"base": None, "spread": 0.5, "width": None, "root": None, "towards": None, "rim": None, "paint": "auto"},
     "pair": {"offset": None, "aspect": 1.0, "width": None, "thickness": None, "lean": 0.0, "root": None, "side": "both", "far": "auto"},
-    "wings": {"offset": None, "out_up": 0.5, "out_back": 1.0, "span": None, "thickness": 2, "root": None, "side": "both", "curl": 0.0, "far": "auto"},
+    "wings": {"offset": None, "out_up": None, "out_back": None, "span": None, "thickness": 2, "root": None, "side": "both", "curl": 0.0, "far": "auto", "opening": None},
     "decal": {"side": "both"},
     "skip": {},
 }
@@ -963,7 +964,10 @@ def build(p: Profile, plan: dict[str, Any], margin: int = 2, outline: Optional[s
             off = part.get("offset")
             if off is None:
                 off = max(t / 2.0, body_half_at(root[0], root[1]) - t / 2.0)
-            up, back = float(part.get("out_up") or 0.0), float(part.get("out_back") or 0.0)
+            if part.get("out_up") is None and part.get("out_back") is None:
+                up, back = WING_OPENING            # nobody said how it opens (see tune_wings)
+            else:
+                up, back = float(part.get("out_up") or 0.0), float(part.get("out_back") or 0.0)
             # a flat sheet hinged at the root: what lies before the hinge stays against the flank
             gain = np.maximum(0.0, up * (root[1] - rr) + back * (root[0] - cc))
             if part.get("span") and float(gain[m].max()) > 1e-6:
@@ -1339,6 +1343,37 @@ def tune_camera(built: Built, sprites: dict[str, np.ndarray], fam: Optional[Fami
                 best = (sc, d)
         out[role] = best[1]
     return out
+
+
+def tune_wings(p: Profile, plan: dict[str, Any], sprites: dict[str, np.ndarray], fam: Optional[Families] = None) -> dict[str, Any]:
+    """How the wings open, when the plan does not say: a flat sheet can leave the body anywhere between straight up
+    (a thin V seen from the front) and straight back (its whole face to the front and back cameras). Each wings part
+    without out_up / out_back is built every 15 degrees between the two and keeps the opening whose front and back
+    views overlap those sprites best. Returns the plan to build (a copy with the openings found; the plan given is
+    not changed, so it is tuned again when something else moves)."""
+    import copy
+    import math
+    todo = [k for k, part in enumerate(plan["parts"]) if part["type"] == "wings" and part.get("out_up") is None and part.get("out_back") is None]
+    if not todo or not any(sprites.get(r) is not None for r in ("front", "back")):
+        return plan
+    fam = fam or families_of(*[sprites.get(r) for r in ("side", "front", "back")])
+    plan = copy.deepcopy(plan)
+    for k in todo:
+        best = (-1.0, WING_OPENING, 60)
+        for deg in (0, 15, 30, 45, 60, 75, 90):
+            up, back = round(math.cos(math.radians(deg)), 3), round(math.sin(math.radians(deg)), 3)
+            plan["parts"][k]["out_up"], plan["parts"][k]["out_back"] = up, back
+            try:
+                built = build(p, plan)
+            except PlanError:
+                raise
+            views = evaluate(built, sprites, tune_camera(built, sprites, fam), fam=fam)["views"]
+            score = float(np.mean([v["iou"] for v in views.values()])) if views else 0.0
+            if score > best[0] + 1e-4:
+                best = (score, (up, back), deg)
+        plan["parts"][k]["out_up"], plan["parts"][k]["out_back"] = best[1]
+        plan["parts"][k]["opening"] = best[2]
+    return plan
 
 
 def paint_caps(built: Built, sprites: dict[str, np.ndarray], depths: dict[str, float], fam: Optional[Families] = None) -> int:
@@ -1834,6 +1869,8 @@ def report(built: Built) -> str:
                 bits.append(f"{text} {part[key]}")
         if part["type"] == "wings" and part.get("out_up_used") is None:
             bits.append(f"out_up {part.get('out_up')}, out_back {part.get('out_back')}")
+        if part.get("opening") is not None:
+            bits.append(f"opening found by Seurat against the front and back sprites ({int(part['opening'])} degrees from straight up)")
         lines.append(f"- {part['name']} ({part['type']}): " + ", ".join(bits))
     lines += [f"! {n}" for n in built.notes]
     return "\n".join(lines)

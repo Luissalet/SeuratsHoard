@@ -503,6 +503,7 @@ def test_camera_render_and_sprite_match():
     other.grid[7:9, 0:15, 7:9] = 1
     bad = spritecam.match_view(other, ref, 0, 45)
     assert good.iou > 0.8 > bad.iou and "silhouette match" in good.summary()
+    assert "missing" in spritecam.where(bad, None, [16, 16, 16]) and "x " in spritecam.where(bad, None, [16, 16, 16])
     assert spritecam.sheet([good, bad]).width > 100 and spritecam.colours([ref])
 
 

@@ -925,7 +925,7 @@ class Generator:
                 best.update(score=score, step=0, code=last_code, grid=model.grid.copy(), palette=list(model.palette))
                 job.match = score
             user_text += ("\n\nYou are CONTINUING an earlier generation. Your best program so far is below; it built the "
-                          "current model" + (f" (mean silhouette match {score:.2f}):\n" + "\n".join(m.summary() for m in matches)
+                          "current model" + (f" (mean silhouette match {score:.2f}):\n" + "\n".join(m.summary() + "\n" + spritecam.where(m, sprite_data, model.size) for m in matches)
                                              if sprites else "") + "\nThe pictures show it" + (" (sprite comparison, then contact sheet)" if sprites else "")
                           + ". Improve it: fix the worst views first and change a few things at a time.\n```python\n" + last_code + "\n```")
             user_images = ([png_bytes(spritecam.sheet(matches))] if sprites else list(ref_images)) + [png_bytes(sheet(model, 1100))]
@@ -1029,7 +1029,8 @@ class Generator:
             user_images = list(ref_images) + [png_bytes(sheet(model, 1100))]
             if sprites:
                 user_text = (f"It ran: {res.count} voxels, {len(res.palette)} colours, bounds {model.bounds()}. Mean silhouette match "
-                             f"{score:.2f}.\n" + "\n".join(m.summary() for m in matches) + "\nThe FIRST picture puts each sprite next to "
+                             f"{score:.2f}.\n" + "\n".join(m.summary() + "\n" + spritecam.where(m, sprite_data, model.size) for m in matches)
+                             + "\nThe FIRST picture puts each sprite next to "
                              "your model seen from the same camera and the silhouette diff (red missing, blue extra); the SECOND is a "
                              "contact sheet of the model (front, left, top, back, two isometric views). Be a harsh critic: go through "
                              "each view, find which part of your model makes each red and blue area (remember the camera looks down: "

@@ -46,6 +46,11 @@ READING THE SIDE SPRITE. Find the head before anything else; a wrong head ruins 
   with those colours and markings is the head. Do the same for the tail (bottom of the back sprite), the belly, the wings.
 - The tail is at the end opposite to the head; wings and arms rise from the back or shoulders, between the two; legs
   hang under the body.
+- A person or a doll (a big head on a small body): the head is ONE solid from the top of the hat or the hair down to
+  the chin, and the face is in its lower half, not in the body. Under it a small torso, the arms (a pair), the legs
+  (a pair) and what is carried on the back (a solid behind the torso).
+- An animal on four legs: the front legs are one pair and the hind legs another; a mane, a shell or a hump on the
+  back is a solid of its own, as wide as the back sprite draws it.
 The plan says where the eye is: "eye": [column, row] of the side sprite. Seurat checks that it lies in a part that can
 be a head, on the side the plan says the character faces.
 
@@ -59,14 +64,18 @@ PART TYPES
   "thickness": 2 to 6. A crest is a fin (or a solid with a small width), never a ball.
 - "fan": on the middle line, narrow at its root and widening away from it, with a flat end: a tail fan, a skirt, a mane.
   "base": its width where it starts, "width": its width at the far end. Seurat paints its end from the back sprite.
-- "pair": something the character has twice, one on each side, drawn once in the profile: legs, feet, arms, ears, horns,
-  side fins. "offset": how far from the middle line the middle of each one is; "width": how thick each one is across.
-- "wings": two flat sheets that start at the body and open outwards: wings, big ears, the halves of a cape.
-  "root": [column, row] of the side sprite where the wing joins the body (the shoulder). "span": total width from tip to
-  tip, read from the front or back sprite. "thickness": 2 or 3. How the sheet opens (straight up in a thin V, or back
-  with its face to the front and back cameras, or between) is NOT yours to give: Seurat builds every opening and keeps
-  the one whose front and back views match those sprites best. A flat sheet cannot do more than that, so do not spend
-  actions on the wings' angle: get their pixels, their root and their span right.
+- "pair": something the character has twice, one on each side, drawn once in the profile, that hangs or stands beside
+  the body: legs, feet, arms, ears, horns. "offset": how far from the middle line the middle of each one is (never
+  further out than the body is wide there, or it hangs in the air); "width": how thick each one is across.
+- "wings": two flat sheets that start at the body and open outwards: wings, flippers and fins that stick out to the
+  sides, big flat ears, the halves of a cape. Whatever the front or back sprite shows reaching far out to each side
+  is a sheet, not a pair.
+  "root": [column, row] of the side sprite where the sheet joins the body (the shoulder). "span": total width from tip
+  to tip, read from the front or back sprite. "thickness": 2 or 3. How the sheet opens (straight up in a thin V, or
+  back with its face to the front and back cameras, or between; downwards for a flipper that hangs below its root) is
+  NOT yours to give: Seurat builds every opening and keeps the one whose front and back views match those sprites
+  best. A flat sheet cannot do more than that, so do not spend actions on its angle: get its pixels, its root and its
+  span right.
 - "decal": a marking that is only on the flanks: an eye, a cheek spot. It is exactly the pixels of its shapes.
 - "skip": NOT BUILT. Side sprites often let the FAR wing, arm, leg or ear peek out behind the near one, shifted, only so
   the drawing reads well. That is a stylistic choice of the sprite, not anatomy: from the front and from behind both
@@ -113,7 +122,7 @@ character from every side in the lit views. Usual faults: wings too short or too
 (out_up / out_back), not touching the body (root), a body too thin or too fat (width), legs fused in the middle
 (offset), the far wing built as if it belonged to the near one or as a neck or a slab on the middle line (skip it:
 between the wings the back sprite has only the head and what is on it), a crest built as a ball, a part that took its
-neighbour's pixels, a tail fan built as a ball. The wings' silhouettes never match those two sprites exactly: they hold the wings in another
+neighbour's pixels, a tail fan built as a ball, flippers or side fins built as a pair of blocks instead of sheets. The wings' silhouettes never match those two sprites exactly: they hold the wings in another
 pose than the side sprite, and the opening is already the best a flat sheet gives. Leave it. Change a few things at a time with adjust and finish with done when it reads right."""
 
 FIRST = """Rebuild this character in voxels from its sprites.
@@ -260,7 +269,7 @@ def construct(profile: sp.Profile, plan: dict[str, Any], sprites: dict[str, np.n
     """Plan to voxels: build, find the cameras of the front and back sprites, paint the fans' ends. Returns the model
     as built, the cameras and how each view matches."""
     fam = sp.families_of(*[sprites.get(r) for r in ("side", "front", "back")])
-    built = sp.build(profile, sp.tune_wings(profile, plan, sprites, fam))
+    built = sp.build(profile, sp.tune_wings(profile, plan, sprites, fam), sprites=sprites)
     if max(built.grid.shape) > MAX_SIDE:
         raise sp.PlanError(f"the model would be {built.grid.shape} voxels: reduce spans and widths")
     depths = sp.tune_camera(built, sprites, fam, camera)
@@ -304,7 +313,7 @@ def build_model(svc: Any, entries: list[dict[str, Any]], plan: Optional[dict[str
     return {"id": saved.id, "name": saved.name, "size": saved.size, "count": saved.count, "plan": plan, "camera": depths,
             "report": sp.report(built), "views": {r: {k: (round(v, 3) if isinstance(v, float) else v) for k, v in res.items()}
                                                    for r, res in views.items()},
-            "pictures": {"parts": png(sp.parts_picture(profile, built.label, built.parts)),
+            "pictures": {"parts": png(sp.reading_picture(profile, built)),
                          "match": png(match_img) if match_img is not None else b"", "lit": png(lit_sheet(saved))}}
 
 
@@ -340,20 +349,7 @@ def read_profile_info(svc: Any, entries: list[dict[str, Any]], facing: str = "ri
 
 
 def _union_palette(profile: sp.Profile, sprites: dict[str, np.ndarray]) -> tuple[list[str], set]:
-    palette = list(profile.palette)
-    inks: set = set()
-    for role in ("side", "front", "back"):
-        t = sprites.get(role)
-        if t is None:
-            continue
-        inks |= {tuple(c) for c in sp.ink_colours(t)}
-        for c in np.unique(t[t[..., 3] >= 128][:, :3], axis=0):
-            hexc = sp._hex(c)
-            if hexc not in palette:
-                palette.append(hexc)
-    # ink has no letter: keep the letters for the colours that fill
-    fills = [c for c in palette if sp._rgb(c) not in inks]
-    return fills, inks
+    return sp.fill_letters(profile, sprites)
 
 
 # ---------------------------------------------------------------------------------------------- the generation
@@ -579,7 +575,7 @@ def run(gen: Any, job: Any) -> VoxelModel:
         state.update(plan=plan, built=built, camera=depths, views=views, profile=prof)
         model.grid, model.palette = built.grid, list(built.palette)
         match_img, _ = sp.match_picture(built, sprites, depths)
-        state["pics"] = [png(sp.parts_picture(prof, built.label, built.parts)), png(match_img) if match_img is not None else b"",
+        state["pics"] = [png(sp.reading_picture(prof, built)), png(match_img) if match_img is not None else b"",
                          png(lit_sheet(model))]
         model.source = {"kind": "generated", "method": "parts", "plan": plan, "camera": depths, "job": job.id,
                         "prompt": p.get("prompt") or "", "references": [e["id"] for e in entries],

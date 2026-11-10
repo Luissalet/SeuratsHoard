@@ -614,7 +614,7 @@ class PartsReadArgs(BaseModel):
 
 class PartsBuildArgs(BaseModel):
     references: list[PartsRef] = Field(..., min_length=1, max_length=6)
-    plan: Optional[dict[str, Any]] = Field(None, description='{"facing": "right", "parts": [{"name", "type": solid | fin | fan | pair | wings | decal | skip, "where": [[col0, row0, col1, row1] or {"poly": [[col, row], ...]}], "colors": "letters", ...sizes}]}. Sizes by type: solid width; fin thickness; fan base, width; pair offset, width; wings root [col, row], span, out_up, out_back, thickness. Empty: the whole profile as one rounded solid.')
+    plan: Optional[dict[str, Any]] = Field(None, description='{"facing": "right", "parts": [{"name", "type": solid | fin | fan | pair | wings | decal | skip, "where": [[col0, row0, col1, row1] or {"poly": [[col, row], ...]}], "front": [shapes in the front sprite], "back": [shapes in the back sprite], "colors": "letters", ...sizes}]}. A part placed in the front or back sprite is built across the body as that sprite draws it (a solid as wide at every height, a pair as far apart, wings as far out: give both of a pair or of the wings) and painted from it; sizes are for parts no such sprite shows, or to overrule it: solid width; fin thickness; fan base, width; pair offset, width; wings root [col, row], span, out_up, out_back, thickness. "eye": [col, row] of the side sprite. Empty: the whole profile as one rounded solid.')
     name: str = Field("", max_length=120)
     into: str = Field("", max_length=64, description="Rebuild this model instead of making a new one (its voxels stay as a version).")
 
@@ -669,13 +669,15 @@ TOOLS += [
     Tool("sprite_parts_read", _d("What a character's sprites say before building it by parts: the side sprite (the profile) as a "
                                  "pixel map with colour letters, the front and back maps, the widths they show row by row, and a "
                                  "picture of the sprites with rulers.",
-                                 "Write the plan for model_from_parts from it: shapes are in the side sprite's columns and rows.",
+                                 "Write the plan for model_from_parts from it: each part's shapes in the side sprite (where) and, in their own "
+                                 "columns and rows, in the front and back sprites (front, back).",
                                  "leer sprites, perfil, mapa de píxeles"),
          PartsReadArgs, ann(read_only=True), _parts_read, timeout_s=60, capped=False),
-    Tool("model_from_parts", _d("Build a character from its game sprites part by part, with no language model: the side sprite is "
-                                "the exact profile and a plan says what each part is across the body (solid, fin, fan, pair, wings, "
-                                "decal, skip for the far wing or leg a side sprite only draws for looks). Seurat does the geometry, "
-                                "keeps the sprite's colours and compares the result with the front and back sprites.",
+    Tool("model_from_parts", _d("Build a character from its game sprites part by part, with no language model: a plan says what each "
+                                "part is (solid, fin, fan, pair, wings, decal, skip for the far wing or leg a side sprite only draws "
+                                "for looks) and where it is in the side, front and back sprites. Seurat builds each part from how "
+                                "the sprites draw it (the profile from the side one, across the body from the front or back one), "
+                                "paints each side from its own sprite and leaves the drawing's lines out.",
                                 "Without a plan: the whole profile as one rounded solid. The plan stays with the model.",
                                 "sprite a voxel por partes, personaje desde sprites, alas, plan de partes"),
          PartsBuildArgs, ann(draft_safe=True), _parts_build, timeout_s=180, capped=False),

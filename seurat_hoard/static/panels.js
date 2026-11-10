@@ -422,6 +422,15 @@ function genParams() {
   };
 }
 
+// what the independent check of a parts plan said about how the sprite was read
+function checkText(c) {
+  const wrong = (c.wrong || []).map((w) => `«${w.part}» es en realidad ${w.really || '?'}`);
+  const missing = (c.missing || []).map((m) => `falta: ${m}`);
+  const all = [...wrong, ...missing];
+  if (!all.length && c.verdict !== 'redo') return 'Comprobación independiente: la lectura del sprite es correcta.';
+  return `Comprobación independiente: ${all.join('; ') || 'lectura equivocada'}${c.verdict === 'redo' ? ' (pide rehacer el plan)' : ''}.`;
+}
+
 function spriteTarget(used) {
   const t = $('gen-target').value;
   if (t === 'free' || !['agent', 'auto', 'parts'].includes($('gen-method').value)) return false;
@@ -617,6 +626,7 @@ function renderJob(d) {
         r.sprite_render ? el('img', { class: 'sprite-cmp', src: `/renders/${r.sprite_render}`, alt: 'Sprites frente al modelo', loading: 'lazy',
           onclick: () => showRender({ ...r, render: r.sprite_render }) }) : null,
         !isStart && r.notes ? el('div', { class: 'round-notes', text: r.notes }) : null,
+        r.check ? el('div', { class: 'round-notes', text: checkText(r.check) }) : null,
         r.errors && r.errors.length ? el('ul', { class: 'round-errors' }, ...r.errors.map((e) => el('li', { text: e }))) : null,
         actions)));
   }

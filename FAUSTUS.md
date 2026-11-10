@@ -52,7 +52,11 @@ images). Connector preset: its own `faustus-plugin.json`.
   model never keep the far copy (`partsgen._drop_keep`); a person can, in the panel or with the tools. Carrying on (`partsgen._base_model`): `continue_from` (or `into` with
   start `current`) on a model whose source is a parts plan builds that plan as step 0 and opens the loop with the sprites
   kept in `source.entries`, the pictures of the model and the prompt as the request; UI *Pedir el cambio* in the parts
-  panel. Loop action `revert` (`step`) rebuilds the plan of an earlier built step. Guarantees: every sprite pixel that is not skipped is a column of voxels,
+  panel. Loop action `revert` (`step`) rebuilds the plan of an earlier built step. Second opinion (`partsgen.second_opinion`,
+  setting `parts_check`, on by default): after the first plan that builds, one call in a fresh context with the sprites, the
+  parts picture and a list of each part's columns, rows and colours answers `{head, wrong[], missing[], verdict}`; faults
+  (not the unsure ones, not those about parts Seurat left out itself) are appended to the loop's next message, the round
+  keeps them in `check`, and the plan that answers them is checked once more. Guarantees: every sprite pixel that is not skipped is a column of voxels,
   nothing outside the silhouette, left-right symmetric, the first voxel from each side shows the sprite's pixel. A `width` given to a solid or a fan is met exactly. `paint_faces`: a solid takes
   the front or back sprite's own pixels on the voxels that camera sees and whose surface looks more at it than sideways
   (`surface_normals`), when that sprite's silhouette overlaps the model's by `FACE_IOU` (0.82) or the part asks (`paint`:

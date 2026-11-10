@@ -34,7 +34,9 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
     widths, wingspan, how the wings open, how far apart the legs are or what each part is, and rebuilds; the whole plan
     can be edited there too. With *Pedir el cambio* (or `continue_from` and a text) DeepSeek carries on from that plan with
     what is asked in words ("open the wings more", "that blue patch is the belly"), using the model's own sprites; in
-    the loop it can go back to the plan of an earlier step (`revert`).
+    the loop it can go back to the plan of an earlier step (`revert`). The first plan that builds gets an independent
+    check: the model, without the reasoning that wrote it, looks at the pixels by part and says whether each name is
+    what those pixels are (the head, a wing taken for a neck, a belly taken for a foot); what it finds goes back to the loop.
   - *Game sprites as the target* (`target: sprite`, automatic for small pixel art): the front, back and side pictures
     are overworld sprites to rebuild in 3D, the way voxel mods do it (about one voxel per sprite pixel, the sprite's own
     colours and design). The side sprite is a true profile (no camera angle): the most important view, it counts double

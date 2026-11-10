@@ -10,3 +10,5 @@
 - Partes: alas y aletas curvadas o plegadas (hoy son láminas planas) y extremidades lejanas con pose propia.
 - Partes: pintar de frente y de espalda también cuando ese sprite está en otra pose que el lateral, deformando su dibujo
   parte a parte.
+- Partes: pedir el primer plan dos veces y construir el más coherente (la lectura del sprite que hace el modelo cambia de
+  un intento a otro: qué es la cabeza, qué son las patas), y dejarle volver al plan de un paso anterior.

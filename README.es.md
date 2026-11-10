@@ -13,6 +13,21 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
   - *Como agente* (por defecto): tras el brief de diseño, DeepSeek trabaja en bucle como un harness agéntico: ejecuta su
     programa voxel, recibe el resultado o el error con la línea que falla, mira el modelo desde cualquier lado, corrige y
     refina (reescribiendo el programa o editando partes, y volviendo a su mejor versión si un cambio empeora), y dice cuándo ha terminado (acciones y minutos máximos en Ajustes). Cada ejecución que funciona se guarda.
+  - *Personajes por partes* (`method: parts`; es lo que se usa solo cuando hay un sprite lateral): el sprite lateral es el
+    perfil exacto del modelo (cada píxel es una columna de voxels) y un plan dice qué es cada parte a lo ancho del cuerpo:
+    `solid` (sólido redondeado en el plano medio: cuerpo, cabeza, cola gruesa), `fin` (aleta fina), `fan` (abanico que se
+    ensancha; su extremo se pinta desde el sprite trasero), `pair` (par simétrico: patas, brazos, orejas), `wings` (dos
+    láminas planas que salen del cuerpo, con envergadura y dirección de apertura), `decal` (marca solo en los flancos:
+    ojos) y `skip` (lo que el sprite lateral enseña solo por estética, como el ala de detrás asomando: no se construye,
+    la cercana reflejada ya es la otra). DeepSeek decide esa estructura y lee los anchos en los sprites de frente y
+    espalda; la geometría, los colores (el contorno negro desaparece y las líneas interiores se suavizan) y la
+    comparación son de Seurat. Tras cada plan le enseña qué píxeles cogió cada parte, cada sprite junto al modelo desde
+    su cámara (oblicua: las alturas se conservan y la profundidad desplaza; cuánto, se busca solo para cada sprite) y el
+    modelo con luz desde varios lados, y el modelo ajusta (`adjust`) o rehace el plan. Las formas del plan son
+    aproximadas (rectángulos o polígonos en columnas y filas del sprite, con filtro de colores): se ajustan a las manchas
+    de color y a las líneas del sprite. El plan se guarda con el modelo: el panel *Partes del personaje* cambia anchos,
+    envergadura, apertura de las alas, separación de las patas o el tipo de cada parte y reconstruye, y también deja
+    editar el plan entero.
   - *Sprites del juego como objetivo* (`target: sprite`, automático con pixel art pequeño): las imágenes frontal, trasera
     y lateral son sprites de overworld que hay que reconstruir en 3D como hacen los mods voxel (un voxel por píxel más o
     menos, los colores y el diseño del sprite). El sprite lateral es un perfil puro (sin ángulo de cámara): la vista más
@@ -47,7 +62,7 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
 - **Exportar**: `.vox` (MagicaVoxel 150, ida y vuelta), `.glb` (colores por vértice, mallado agrupado), `.stl` binario
   en milímetros (malla cerrada, z arriba, ajuste `voxel_mm`), PNG de cualquier vista y una tira de sprites isométricos
   desde cuatro lados. Se pueden importar `.vox` y schematics `.schem` de Minecraft (WorldEdit).
-- **Asistentes** (MCP, `mcp_server.py`, 29 herramientas): listar, crear y editar modelos con operaciones (`model_ops`),
+- **Asistentes** (MCP, `mcp_server.py`, 32 herramientas): listar, crear y editar modelos con operaciones (`model_ops`),
   verlos (`model_look` devuelve una imagen, también desde las cámaras de overworld del juego), comparar un modelo con
   sprites del juego desde su cámara (`model_sprite_match`), ejecutar programas voxel con las herramientas de sprites
   (`model_program` con `sprites`), añadir referencias, construir o generar desde imágenes, seguir y cancelar

@@ -2,6 +2,7 @@
 // settings. `ctx` comes from app.js (the editor, the open model, openModel, flushSave, the event bus...).
 
 import { $, el, api, toast, fail, modal, confirmBox, nf, store } from './ui.js';
+import { initParts } from './parts.js';
 
 const ROLES = [
   ['front', 'Frente'], ['side', 'Lado (izquierdo)'], ['top', 'Arriba'], ['back', 'Detrás'], ['extra', 'Extra'], ['none', 'No usar'],
@@ -23,6 +24,7 @@ export function initPanels(context) {
   initExport();
   initSettings();
   initGlobalDrop();
+  initParts(ctx);
   ctx.bus.addEventListener('status', (e) => { renderLlm(e.detail); fillSettings(e.detail.settings, false); });
   if (ctx.state.status) { renderLlm(ctx.state.status); fillSettings(ctx.state.status.settings, true); }
   ctx.bus.addEventListener('model', () => { renderDest(); refreshExport(); });
@@ -269,7 +271,8 @@ function genParams() {
     max_side: parseInt($('gen-size').value, 10),
     colors: parseInt($('gen-colors').value, 10),
     effort: $('gen-effort').value,
-    method: $('gen-method').value,
+    // automatic: sprites with a side view are built by parts, anything else by the method of the settings
+    ...($('gen-method').value === 'auto' ? {} : { method: $('gen-method').value }),
     target: $('gen-target').value,
     // with game sprites as the target the grid follows the sprites (about one voxel per pixel)
     ...((used.length && !['code', 'agent'].includes($('gen-method').value)) || spriteTarget(used) ? {} : { size: Array(3).fill(parseInt($('gen-size').value, 10)) }),
@@ -278,7 +281,7 @@ function genParams() {
 
 function spriteTarget(used) {
   const t = $('gen-target').value;
-  if (t === 'free' || $('gen-method').value !== 'agent') return false;
+  if (t === 'free' || !['agent', 'auto', 'parts'].includes($('gen-method').value)) return false;
   const views = used.filter((r) => ['front', 'back', 'side'].includes(roleOf(r.id)));
   if (!views.length) return false;
   return t === 'sprite' || views.every((r) => Math.max(r.width || 999, r.height || 999) <= 160);
@@ -441,6 +444,8 @@ function renderJob(d) {
         el('div', { class: 'round-title', text: isStart ? `Inicio (${START_LABEL[(r.notes || '').replace('inicio: ', '')] || r.notes})` : `Ronda ${r.round}` }),
         el('div', { class: 'round-meta', text: `${nf.format(r.count)} voxels${isStart ? '' : ` · ${r.applied} operaciones`}${r.size ? ` · ${r.size.join('×')}` : ''}` }),
         r.match !== undefined ? el('div', { class: 'round-meta', text: `Coincidencia con los sprites: ${r.match.toFixed(2)} (${(r.views || []).map((v) => `${v.role} ${v.iou.toFixed(2)}`).join(', ')})` }) : null,
+        r.parts_render ? el('img', { class: 'sprite-cmp', src: `/renders/${r.parts_render}`, alt: 'El sprite lateral y sus partes', loading: 'lazy',
+          onclick: () => showRender({ ...r, render: r.parts_render }) }) : null,
         r.sprite_render ? el('img', { class: 'sprite-cmp', src: `/renders/${r.sprite_render}`, alt: 'Sprites frente al modelo', loading: 'lazy',
           onclick: () => showRender({ ...r, render: r.sprite_render }) }) : null,
         !isStart && r.notes ? el('div', { class: 'round-notes', text: r.notes }) : null,
@@ -584,7 +589,8 @@ function fillSettings(s, defaults) {
     $('gen-colors').value = s.colors;
     $('gen-rounds').value = s.review_rounds;
     $('gen-effort').value = s.effort;
-    if (s.method) $('gen-method').value = s.method;
+    // the form stays on automatic (sprites with a side view by parts) unless the settings ask for another method
+  if (s.method && s.method !== 'agent') $('gen-method').value = s.method;
     if (['code', 'agent'].includes(s.method) && s.code_size) $('gen-size').value = Math.max(8, Math.min(128, s.code_size));
     syncOutputs();
   }

@@ -212,6 +212,7 @@ class PartsLink:
 
     def __init__(self):
         self.calls = []
+        self.answers = None
         self.sync = SimpleNamespace(chat=self.chat, resolve=self.resolve)
 
     def resolve(self, capability):
@@ -221,7 +222,7 @@ class PartsLink:
     def chat(self, messages, images=None, **kw):
         self.calls.append({"messages": messages, "images": images or [], **kw})
         n = len(self.calls)
-        answers = [{"action": "build", "notes": "wrong type", "plan": {"parts": [{"name": "b", "type": "tentacle"}]}},
+        answers = self.answers or [{"action": "build", "notes": "wrong type", "plan": {"parts": [{"name": "b", "type": "tentacle"}]}},
                    {"action": "build", "notes": "body, wings, legs", "plan": PLAN},
                    {"action": "adjust", "notes": "wider wings", "set": {"wings": {"span": 40}, "nobody": {"width": 3}}},
                    {"action": "adjust", "notes": "wider wings", "set": {"wings": {"span": 40}}},
@@ -378,6 +379,26 @@ def test_generation_by_parts_and_its_tools(tmp_path):
         src = model["source"]
         assert src["method"] == "parts" and src["plan"]["parts"][5]["span"] == 40 and "partial" not in src
         assert model["count"] > 800 and model["size"][0] >= 40
+        # carrying on a model built by parts: what the user asks now goes first, and the model can go back a step
+        link.answers = [{"action": "adjust", "notes": "wider", "set": {"body": {"width": 18}}},
+                        {"action": "revert", "notes": "it was better before", "step": 0},
+                        {"action": "revert", "step": 7},
+                        {"action": "done", "notes": "as it was"}]
+        link.calls = []
+        job2 = c.post("/api/generate", json={"continue_from": st["model_id"], "prompt": "make the body wider"}).json()
+        st2 = c.get(f"/api/jobs/{job2['job_id']}").json()
+        assert st2["status"] == "done" and st2["model_id"] == st["model_id"], st2
+        texts = [m["messages"][-1]["content"] for m in link.calls]
+        texts = [t[0]["text"] if isinstance(t, list) else t for t in texts]
+        assert "ALREADY BUILT" in texts[0] and "make the body wider" in texts[0] and "SIDE sprite" in texts[0]
+        assert len(link.calls[0]["images"]) == 4                              # the sprites, and the model as it is: parts, comparison, lit
+        assert "width 18" in texts[1] and "revert to: 0" in texts[1]
+        assert "Step 2." in texts[2] and "width 18" not in texts[2]
+        assert "no built step 7" in texts[3]
+        again = c.get(f"/api/models/{st['model_id']}").json()
+        assert again["source"]["plan"]["parts"][0]["width"] == src["plan"]["parts"][0]["width"] and again["count"] == model["count"]
+        assert len(c.get(f"/api/models/{st['model_id']}/versions").json()["versions"]) >= 1
+        link.answers = None
         head = {"Authorization": "Bearer " + svc.token}
 
         def call(name, arguments):

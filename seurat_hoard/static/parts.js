@@ -21,15 +21,19 @@ const FIELDS = {
 };
 
 let ctx;
+let hooks = {};
 let box;
 let busy = false;
 
-export function initParts(context) {
+export function initParts(context, extra) {
   ctx = context;
+  hooks = extra || {};
   const style = document.createElement('style');
   style.textContent = `
     .parts-box { margin-top: 14px; padding: 12px; border: 1px solid var(--line, #3a3640); border-radius: 10px; display: grid; gap: 10px; }
     .parts-box h3 { margin: 0; font-size: 14px; }
+    .parts-ask-row { display: grid; gap: 6px; justify-items: start; }
+    .parts-box .parts-ask-row textarea { min-height: 54px; font: inherit; font-size: 12px; }
     .parts-box .hint { margin: 0; opacity: .75; font-size: 12px; }
     .part-row { display: grid; gap: 6px; padding: 8px; border-radius: 8px; background: rgba(255,255,255,.04); }
     .part-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
@@ -81,13 +85,28 @@ function render(report) {
     onclick: () => apply(area) });
   const toggle = el('button', { type: 'button', class: 'btn small', text: 'Editar el plan', title: 'El plan completo en JSON: formas, colores y tipos de cada parte',
     onclick: () => { area.hidden = !area.hidden; toggle.textContent = area.hidden ? 'Editar el plan' : 'Ocultar el plan'; } });
+  const ask = el('textarea', { class: 'parts-ask', rows: 2, spellcheck: false,
+    placeholder: 'Pídele un cambio a DeepSeek: «alas más abiertas», «la mancha azul es la panza, no un pie»…' });
+  const askBtn = el('button', { type: 'button', class: 'btn small', text: 'Pedir el cambio',
+    title: 'DeepSeek sigue desde este plan con lo que le pidas (varios minutos); la versión actual se guarda', onclick: () => request(ask) });
   box.replaceChildren(
     el('h3', { text: 'Partes del personaje' }),
     el('p', { class: 'hint', text: 'El perfil es el sprite lateral; aquí se ajusta cómo es cada parte a lo ancho. Vacío = automático.' }),
     ...rows,
     el('div', { class: 'parts-actions' }, rebuild, toggle),
     area,
+    hooks.generate ? el('div', { class: 'parts-ask-row' }, ask, askBtn) : null,
     typeof report === 'string' && report ? el('pre', { class: 'parts-report', text: report }) : null);
+}
+
+function request(ask) {
+  const m = ctx.current();
+  if (!planOf(m) || !hooks.generate) return;
+  const text = ask.value.trim();
+  if (!text) { toast('Escribe qué quieres cambiar.', 'err'); return; }
+  // the model carries on from this plan with its own sprites; what is asked here goes first
+  hooks.generate({ references: [], prompt: text, continue_from: m.id, into: m.id, start: 'auto', name: '',
+    effort: ($('gen-effort') || {}).value || 'max' });
 }
 
 async function apply(area) {

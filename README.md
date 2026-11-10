@@ -32,7 +32,9 @@ export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites
     Shapes are rough (rectangles or polygons in the sprite's columns and rows, with a colour filter): they snap to the
     sprite's patches of colour and its lines. The plan stays with the model: the *Partes del personaje* panel changes
     widths, wingspan, how the wings open, how far apart the legs are or what each part is, and rebuilds; the whole plan
-    can be edited there too.
+    can be edited there too. With *Pedir el cambio* (or `continue_from` and a text) DeepSeek carries on from that plan with
+    what is asked in words ("open the wings more", "that blue patch is the belly"), using the model's own sprites; in
+    the loop it can go back to the plan of an earlier step (`revert`).
   - *Game sprites as the target* (`target: sprite`, automatic for small pixel art): the front, back and side pictures
     are overworld sprites to rebuild in 3D, the way voxel mods do it (about one voxel per sprite pixel, the sprite's own
     colours and design). The side sprite is a true profile (no camera angle): the most important view, it counts double

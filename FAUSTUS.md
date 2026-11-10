@@ -49,7 +49,10 @@ images). Connector preset: its own `faustus-plugin.json`.
   the figure, in a wings, fan, fin or skip part, or in the back third for its `facing` raises `PlanError` (the model reads
   the sprite again); a note warns when nothing around it looks like an eye. Other notes in the report: a skip part of colours no wings or
   pair part has (`_check_skips`), a narrow foot at the bottom rows owned by a solid (`_check_stand`). Plans written by the
-  model never keep the far copy (`partsgen._drop_keep`); a person can, in the panel or with the tools. Guarantees: every sprite pixel that is not skipped is a column of voxels,
+  model never keep the far copy (`partsgen._drop_keep`); a person can, in the panel or with the tools. Carrying on (`partsgen._base_model`): `continue_from` (or `into` with
+  start `current`) on a model whose source is a parts plan builds that plan as step 0 and opens the loop with the sprites
+  kept in `source.entries`, the pictures of the model and the prompt as the request; UI *Pedir el cambio* in the parts
+  panel. Loop action `revert` (`step`) rebuilds the plan of an earlier built step. Guarantees: every sprite pixel that is not skipped is a column of voxels,
   nothing outside the silhouette, left-right symmetric, the first voxel from each side shows the sprite's pixel. A `width` given to a solid or a fan is met exactly. `paint_faces`: a solid takes
   the front or back sprite's own pixels on the voxels that camera sees and whose surface looks more at it than sideways
   (`surface_normals`), when that sprite's silhouette overlaps the model's by `FACE_IOU` (0.82) or the part asks (`paint`:

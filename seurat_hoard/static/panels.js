@@ -27,7 +27,7 @@ export function initPanels(context) {
   initExport();
   initSettings();
   initGlobalDrop();
-  initParts(ctx);
+  initParts(ctx, { generate: startGeneration });
   ctx.bus.addEventListener('status', (e) => { renderLlm(e.detail); fillSettings(e.detail.settings, false); });
   if (ctx.state.status) { renderLlm(ctx.state.status); fillSettings(ctx.state.status.settings, true); }
   ctx.bus.addEventListener('model', () => { renderDest(); refreshExport(); });

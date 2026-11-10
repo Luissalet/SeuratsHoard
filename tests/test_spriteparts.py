@@ -300,6 +300,20 @@ def test_wings_open_the_way_the_other_sprites_say():
     assert sp.tune_wings(p, free, {"side": bird_side()}) is free                              # nothing to compare with
 
 
+def test_nothing_floats_beside_the_body():
+    """Legs set wider apart than the body is thick there would hang in the air: they are joined to the middle plane
+    where they meet the body in the profile."""
+    p = sp.read_profile(bird_side())
+    wide = sp.normalise_plan({**PLAN, "parts": [dict(q, offset=9, width=2) if q["name"] == "legs" else q for q in PLAN["parts"]]})
+    built = sp.build(p, wide)
+    legs = next(q for q in built.parts if q["name"] == "legs")
+    assert legs["joined"] >= 1
+    solids = [k + 1 for k, q in enumerate(built.parts) if q["type"] == "solid"]
+    assert not sp._floating(np.where(built.grid > 0, built.pid, 0), solids).any()
+    assert not any("float" in n for n in built.notes) and any("joined it with a bar" in n for n in built.notes)
+    assert "joined" not in next(q for q in sp.build(p, sp.normalise_plan(PLAN)).parts if q["name"] == "legs")
+
+
 def test_overlapping_shapes_follow_the_patches_of_colour():
     """Rectangles written by a model overlap. A patch stays with the part that has the rest of it, and a shape lying
     inside another one wins there whatever the order."""

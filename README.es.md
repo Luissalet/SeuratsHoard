@@ -23,7 +23,7 @@ voxel y expórtalos a MagicaVoxel, Blender/Godot/Unity, una impresora 3D o de vu
     la cercana reflejada ya es la otra; dentro de unas alas o de un par Seurat la busca sola, otra zona de los mismos
     colores tras una línea propia, y `far: keep` la conserva). El plan dice dónde está el ojo (`eye`):
     la forma que lo lleva es la cabeza, y Seurat rechaza un plan que lo ponga en un ala o en el extremo contrario al que
-    mira el personaje, y avisa cuando una parte «no construir» tiene colores que ningún ala o par tiene (una marca del
+    mira el personaje, une al cuerpo las alas y patas que quedarían flotando a su lado, y avisa cuando una parte «no construir» tiene colores que ningún ala o par tiene (una marca del
     cuerpo que se perdería) o cuando la figura queda de pie sobre una sola pata central. DeepSeek decide esa estructura y lee los anchos en los sprites de frente y
     espalda; la geometría, los colores (el contorno negro desaparece y las líneas interiores se suavizan) y la
     comparación son de Seurat. Cuando el sprite de frente o el de espalda enseñan la misma pose que el modelo (personajes

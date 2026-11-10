@@ -54,7 +54,7 @@ PART TYPES
   "width": how wide it is across at its widest, in voxels (= pixels of the front and back sprites). Without width it is
   as wide as it is thick in profile. Its flanks take the side sprite; when the front or back sprite shows the same
   pose as the model, Seurat paints what faces that camera (a face, the back of the hair) from it by itself.
-  "paint": "none" keeps the side sprite's colours all around, "front", "back" or "both" forces the painting.
+  "paint": "none" keeps the side sprite's colours all around.
 - "fin": a thin slab on the middle line: a crest or plume of feathers, a sail, a dorsal fin, a blade, a comb.
   "thickness": 2 to 6. A crest is a fin (or a solid with a small width), never a ball.
 - "fan": on the middle line, narrow at its root and widening away from it, with a flat end: a tail fan, a skirt, a mane.
@@ -453,6 +453,8 @@ def _drop_keep(plan: dict[str, Any], opening: bool = False) -> list[str]:
         if not opening:
             for key in ("out_up", "out_back", "curl"):
                 part.pop(key, None)
+            if str(part.get("paint") or "").lower() in ("front", "back", "both"):
+                part.pop("paint")               # painting a face from a sprite in another pose puts eyes on a chest
     return names
 
 

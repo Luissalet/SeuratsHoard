@@ -132,3 +132,7 @@ object, most objects, default size), a fixed OpenAI-compatible model URL instead
 WebM spins need ffmpeg on the PATH (or the `imageio-ffmpeg` package); GIF needs nothing.
 
 Tests: `.venv\Scripts\python -m pytest`.
+
+## Skills for the agents that connect
+
+Seurat takes from the skill library of the family's workspace the procedures its work needs (3D assets for the web, Blender assets, composing images, verifying a result) and hands them to every agent that connects: they are named in what the agent reads on connecting, read with `skills_list` and `skill_read`, and offered as prompts. The `skills` block of `faustus-plugin.json` says which; the copies live in `data/skills/` and follow the library when a skill is improved there.

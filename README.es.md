@@ -139,3 +139,7 @@ la familia, y escala de STL y GLB. Los giros en WebM necesitan ffmpeg en el PATH
 no necesita nada.
 
 Tests: `.venv\Scripts\python -m pytest`.
+
+## Skills para los agentes que se conectan
+
+Seurat coge de la biblioteca de skills del espacio de trabajo de la familia los procedimientos que necesita su trabajo (assets 3D para la web, assets en Blender, composición de imágenes, verificar un resultado) y se los da a cada agente que se conecta: aparecen en lo que el agente lee al conectarse, se leen con `skills_list` y `skill_read`, y se ofrecen como prompts. El bloque `skills` de `faustus-plugin.json` dice cuáles; las copias viven en `data/skills/` y siguen a la biblioteca cuando allí se mejora una skill.

@@ -1,123 +1,43 @@
 # Seurat's Hoard
 
-Voxel studio of the Hoard family. Draw voxel models in a 3D editor, turn pictures and sprites into voxel models, and
-export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites.
+A voxel studio: draw voxel models in a 3D editor, turn pictures and sprites into voxel models, and export them to MagicaVoxel, Blender/Godot/Unity, a 3D printer or back to sprites.
 
-- **Editor** (browser or Hoard window, port 5250): add, erase, paint, fill, eyedropper and box tools, X/Z symmetry, a
-  layer slicer to work inside the model, undo/redo, palette editing, autosave with versions you can restore.
-- **Pictures to voxels**
-  - *Instant* (no model): *sprite 3D* (the sprite as a voxel diorama piece, like the sprite-to-voxel game mods: the
-    picture on front and back, a gentle rounded thickness, the 2D outline kept off the sides), *inflate* (the front puffed up like a cushion), *extrude* (a slab) or *silhouette* (front +
-    side views carved into a block, coloured from each view).
-  - *As an agent* (default): after the design brief, DeepSeek works in a loop like an agent harness: it runs its voxel
-    program, gets the result or the error with the failing line, looks at the model from any side, fixes and refines
-    (rewriting the program or editing parts of it, and going back to its best version when a change makes it worse),
-    and says when it is finished (step and time budgets in Settings). Every run that works is saved.
-  - *Characters by parts* (`method: parts`; what runs on its own when there is a side sprite): the side sprite is the
-    model's exact profile (every pixel is a column of voxels) and a plan says what each part is across the body: `solid`
-    (a rounded solid on the middle plane: body, head, thick tail), `fin` (a thin slab), `fan` (widens away from its root,
-    rounded towards its edges; its end is painted from the back sprite), `pair` (legs, arms, ears: one on each side), `wings` (two flat sheets that
-    leave the body, with a span: wings, and flippers that stick out to the sides too; how they open is found by Seurat, trying between straight up and straight back (short of both) and keeping
-    what matches the front and back sprites best; a sheet that hangs below its root, like a flipper, opens downwards, and it starts where it meets the body), `decal` (a marking only on the flanks: eyes) and `skip` (what the side
-    sprite shows only for looks, like the far wing peeking out: not built, the mirrored near one already is it; inside wings or a pair
-    Seurat finds it by itself, a second area of the same colours behind a line of its own, and `far: keep` keeps it). The plan says where the eye is
-    (`eye`): the shape that carries it is the head, and Seurat refuses a plan that puts it on a wing or at the end
-    opposite to where the character faces, brings in the wings, legs and streamers that would float beside the body until they touch it (no joining bars), and warns when a `skip` part has colours no wing or pair has (a body
-    marking that would be lost) or when the figure ends up standing on one leg in the middle. DeepSeek
-    decides that structure and reads the widths off the front and back sprites; the geometry, the colours (the lines of the
-    drawing are not built: the outline goes and every inner line takes its part's colour; a small dark spot such as a pupil
-    stays) and the comparison are Seurat's. When the front or the back sprite shows the same pose as the model (standing characters,
-    chibis), what faces that camera is painted from it: the face from the front, the hair or the back from behind (decided part by part, so a head takes its face even when the sprite holds its arms in another pose); the
-    flanks stay the side sprite (`paint` on each solid: `auto`, `none`, `front`, `back`, `both`). After every plan it shows the model which
-    pixels each part caught, each sprite next to the model from its camera (oblique: heights are kept and depth shifts;
-    how much is found for each sprite) and the model lit from several sides, and the model adjusts or rewrites the plan.
-    Shapes are rough (rectangles or polygons in the sprite's columns and rows, with a colour filter): they snap to the
-    sprite's patches of colour and its lines. A plan written by hand (the tools or *Editar el plan*) can also say where each part is in the front and in the back
-    sprite (`front`, `back`, in that sprite's columns and rows): the part is then built across the body as that sprite
-    draws it (a solid as wide at every height, a pair as far apart, a crest as two crossed blades, wings with the
-    outline it gives them, laid out to each side with their tips raised as high as the side sprite raises the wing)
-    and painted from its own drawing there, whatever pose the rest of the figure holds. The generation with DeepSeek
-    does not ask for it yet: in the trials it read the three sprites well, but the result came out worse than with the
-    profile and the widths. The plan stays with the model: the *Partes del personaje* panel changes
-    widths, wingspan, how the wings open, how far apart the legs are or what each part is, and rebuilds; the whole plan
-    can be edited there too. With *Pedir el cambio* (or `continue_from` and a text) DeepSeek carries on from that plan with
-    what is asked in words ("open the wings more", "that blue patch is the belly"), using the model's own sprites; in
-    the loop it can go back to the plan of an earlier step (`revert`). The first plan that builds gets an independent
-    check: the model, without the reasoning that wrote it, looks at the pixels by part and says whether each name is
-    what those pixels are (the head, a wing taken for a neck, a belly taken for a foot); what it finds goes back to the loop.
-  - *Game sprites as the target* (`target: sprite`, automatic for small pixel art): the front, back and side pictures
-    are overworld sprites to rebuild in 3D, the way voxel mods do it (about one voxel per sprite pixel, the sprite's own
-    colours and design). The side sprite is a true profile (no camera angle): the most important view, it counts double
-    and the program gets it as an array in grid coordinates (`SIDE`, column = z, row = y) with tools to carve the model
-    to it (`carve_side`), fill it (`extrude_side`) and paint from it (`paint_side`, `paint_view` for any sprite), plus the
-    sprites' palette and pixel maps of every sprite in the prompt. Front and back sprites are drawn from about 45 degrees
-    above (their horizontal axis is exactly x; Settings). After every run Seurat projects the model from each sprite's
-    camera at one voxel per pixel and shows the model each sprite next to it with a silhouette diff (red missing, blue
-    extra), match scores and how its size compares; the job panel shows them per round. The agent is told when a run
-    is worse than its best so far and the best version is the one kept. `continue_from` carries a generation on from a
-    model's program and brief (restore the step you want first).
-  - *Sprite sheets and animated sprites*: every frame of a GIF (or animated WebP/PNG) and every cell of a sheet is read
-    (the grid is found from the gaps between the sprites, from their repeat when they touch, or given as columns x
-    rows). Seurat guesses which frames show which side (walk sheets: rows or columns are directions, the rest steps;
-    an animation that turns is cut into its runs; asymmetric groups are sides, the one with a face is the front) and you
-    can change it in *Fotogramas*. With the role *sheet* every side becomes another camera of the same model and its other
-    frames count as poses: the standing frame is the main view, the steps share half of that view's score.
-  - *Camera calibration*: after the first runs (and every third) the agent finds from which angle the game drew each
-    sprite, comparing the model's silhouette from many heights and turns (within 20-70 degrees and 10 around while the
-    model is being built, and only when a sprite matches clearly better), instead of the fixed 45/0 degrees; a side whose
-    camera is unknown (role *view*) finds its turn all around. *Calibrar con el modelo abierto* (`model_sprite_calibrate`)
-    does it for any model with a wide search, shows each sprite against the model from its camera and can save the
-    heights found as settings.
-  - *Scenes by parts* (`method: scene`, grids up to 256 a side): the model plans the scene as objects (a ground, then
-    each object with its size and placements; repeated objects are built once and placed several times, turned), each
-    object is built by its own agent loop in its own grid (up to 128), Seurat places them and sets them down on what is
-    under them, merges their palettes, and the model checks the layout once from a lit view and the top. The plan is
-    shown as boxes first; every object's programs are kept with the scene.
-  - *Rounds in 3-D*: the voxels of every round of a generation are kept, so any intermediate round opens in the editor
-    (*Ver en 3D*, a preview that is not saved) or becomes a model of its own (*Guardar como modelo*, `generate_round`).
-  - *With the language model, as a program in fixed rounds*: DeepSeek V4.1 Flash first writes a design brief from what it
-    knows about the subject and your description (parts, proportions, positions in 3D, palette; pictures are only
-    hints, never traced), then a Python program that builds the
-    voxels (blended ellipsoids, tapered capsules, loops of feathers, polygons, symmetry, numpy masks), Seurat runs it in a
-    separate process with a time limit and no files or network, shows the result and asks for a better program round
-    after round. The last working program is kept with the model. Grids up to 128 per side; scenes from a description
-    alone or creatures from pictures (official artwork works far better than small game sprites).
-  - *With the language model, as operations* (`method: ops`): it sees
-    the reference pictures and their pixel grids, thinks at length (effort `max` by default, several minutes per round)
-    and sculpts the shape from parts (ellipsoids, tapered capsules for necks and tails, polygon prisms for wings and
-    fins). Seurat paints the pictures onto that shape (front and back; the side picture too if you switch it on), and the model reviews a contact sheet of
-    its own result (six views, front-silhouette differences, operation errors) for as many rounds as you choose. A round
-    that would empty or wreck the model is undone. Every round is shown with its render, notes and errors; the
-    answers are kept as text next to the renders. Roles per picture: front, side, top, back, extra.
-  - *From a description alone* (no pictures): the model builds an object, a character or a whole scene from the prompt
-    in a grid of the chosen size, with the same review rounds.
-  - Pixel art enlarged by an integer factor is read at its real size; a flat background colour becomes transparent.
-- **Lit renders**: the 3-D views of the review sheets the model sees, `look` and `model_look` (`lit`, `lit_front_left`,
-  `lit_back_left`, `lit_back_right`, `lit_front`, `lit_top`, any yaw/pitch, `sheet_lit`) have real light: a key light
-  with cast shadows marched through the grid, ambient occlusion in the creases and a ground that catches the shadow,
-  computed in numpy without a GPU (setting `review_render`: lit or flat).
-- **Spin animations**: a turntable of the model with that light, as GIF or WebM (VP9 through ffmpeg), from the Export
-  tab or `model_spin`.
-- **Exports**: `.vox` (MagicaVoxel 150, round trip), `.glb` (vertex colours, greedy-meshed), binary `.stl` in millimetres
-  (closed mesh, z up, setting `voxel_mm`), PNG of any view, and an isometric sprite strip from four sides. `.vox` files
-  and Minecraft `.schem` schematics (WorldEdit) can be imported.
-- **Assistants** (MCP, `mcp_server.py`, 36 tools): list/create/edit models with operations (`model_ops`), look at them
-  (`model_look` returns a picture, also from the game overworld cameras and lit from any side), compare a model with game
-  sprites from their camera (`model_sprite_match`, also with sheets and poses), calibrate those cameras
-  (`model_sprite_calibrate`), read the frames of sheets and animations (`reference_frames`), run voxel programs with the
-  sprite tools (`model_program` with `sprites`), add references, build or generate from pictures or as scenes by parts,
-  follow and cancel generations, open or save any round (`generate_round`), export, spins (`model_spin`), versions,
-  settings.
+[Leer en español](README.es.md)
 
-## The operation language
+## What it is
 
-Axes: x right, y up, z towards the viewer. `c` is a palette index; `c: 0` erases.
-`voxel`, `voxels`, `box`, `line` (with `r`/`r_to`: a tapered capsule), `prism` (a polygon on a plane with thickness:
-wings, fins, ears), `sphere`/`ellipsoid`, `cylinder`, `layer` (pixel rows on the front, side or top
-plane), `inflate` (pixel rows puffed into a volume), `paint` (recolour the surface seen from a side, pixel by pixel),
-`lathe` (solid of revolution), `recolor`, `mirror`, `move`, `clear`. Details in `seurat_hoard/voxels.py`.
+Seurat's Hoard is a local app of the Hoard family (default port 5250). It has a voxel editor and a generation pipeline in which a language model designs and builds voxel models from reference pictures, sprites, sprite sheets or a plain description, while Seurat runs the geometry, colouring, rendering and comparison itself.
 
-## Run
+## What it does
+
+**Editor** (browser or Hoard window)
+- Add, erase, paint, fill, eyedropper and box tools, X/Z symmetry, a layer slicer to work inside the model, undo/redo, palette editing, and autosave with versions you can restore.
+
+**Pictures to voxels**
+- *Instant* (no model): *sprite 3D* (the sprite as a voxel diorama piece, picture on front and back with a rounded thickness), *inflate* (the front puffed up like a cushion), *extrude* (a slab) or *silhouette* (front and side views carved into a block, coloured from each view).
+- *As an agent* (default): after a design brief, the language model works in a loop like an agent harness. It runs its voxel program, gets the result or the error with the failing line, looks at the model from any side, fixes and refines (rewriting the program or editing parts, and going back to its best version when a change makes it worse) and says when it is finished. Step and time budgets are in Settings, and every run that works is saved.
+- *In fixed rounds*: the model writes a design brief from what it knows about the subject and your description (pictures are hints, never traced), then a Python program that builds the voxels (blended ellipsoids, tapered capsules, polygons, symmetry, numpy masks). Seurat runs it in a separate process with a time limit and no files or network, shows the result and asks for a better program each round. Grids up to 128 per side.
+- *As operations* (`method: ops`): the model sees the reference pictures and their pixel grids, thinks at length and sculpts the shape from parts (ellipsoids, tapered capsules, polygon prisms). Seurat paints the pictures onto that shape, and the model reviews a contact sheet of its own result (six views, front-silhouette differences, operation errors) for as many rounds as you choose; a round that would empty or wreck the model is undone. Picture roles: front, side, top, back, extra.
+- *From a description alone*: an object, a character or a whole scene built from the prompt in a grid of the chosen size, with the same review rounds.
+- *Characters by parts* (`method: parts`, automatic when there is a side sprite): the side sprite is the model's exact profile and a plan says what each part is across the body (`solid`, `fin`, `fan`, `pair`, `wings`, `decal`, `skip`). The model decides the structure and reads widths off the front and back sprites; geometry, colours and comparison are Seurat's. It checks the plan (the eye must sit on the head, floating wings and legs are brought to the body), paints faces and backs from the front and back sprites when they show the same pose, shows the model which pixels each part caught and the result lit from several sides, and runs an independent check that each part name matches its pixels. The *Partes del personaje* panel changes widths, wingspan, how wings open, leg spacing or part types and rebuilds; *Pedir el cambio* (or `continue_from` with a text) lets the model carry on from the plan with a request in words.
+- *Game sprites as the target* (`target: sprite`, automatic for small pixel art): the front, back and side pictures are overworld sprites rebuilt in 3D at about one voxel per sprite pixel, with the sprite's own colours. The side sprite is a true profile and counts double; the program gets it as an array with tools to carve, fill and paint from it (`carve_side`, `extrude_side`, `paint_side`, `paint_view`). After every run Seurat projects the model from each sprite's camera and shows each sprite next to it with a silhouette diff (red missing, blue extra) and match scores. The best version is the one kept.
+- *Sprite sheets and animated sprites*: every frame of a GIF (or animated WebP/PNG) and every cell of a sheet is read (grid found from gaps or repeats, or given as columns × rows). Seurat guesses which frames show which side and you can change it in *Fotogramas*; with the role *sheet*, each side becomes another camera of the same model and other frames count as poses.
+- *Camera calibration*: the agent finds from which angle the game drew each sprite instead of the fixed 45/0 degrees. *Calibrar con el modelo abierto* (`model_sprite_calibrate`) does it for any model and can save the heights found as settings.
+- *Scenes by parts* (`method: scene`, grids up to 256 a side): the model plans the scene as objects (a ground, then each object with size and placements; repeated objects are built once), each object is built by its own agent loop in its own grid, Seurat places them on what is under them and merges palettes, and the model checks the layout once. The plan is shown as boxes first.
+- *Rounds in 3-D*: every round of a generation is kept, so any round opens in the editor (*Ver en 3D*) or becomes a model of its own (*Guardar como modelo*, `generate_round`).
+- Pixel art enlarged by an integer factor is read at its real size; a flat background colour becomes transparent.
+
+**Lit renders and animation**
+- The 3-D views of the review sheets (`look`, `model_look`: `lit`, `lit_front_left`, `lit_back_left`, `lit_back_right`, `lit_front`, `lit_top`, any yaw/pitch, `sheet_lit`) have real light: a key light with cast shadows, ambient occlusion in the creases and a ground that catches the shadow, computed without a GPU (setting `review_render`: lit or flat).
+- Spin animations: a turntable of the model with that light, as GIF or WebM (VP9 through ffmpeg), from the Export tab or `model_spin`.
+
+**Import and export**
+- Export `.vox` (MagicaVoxel, round trip), `.glb` (vertex colours, greedy-meshed), binary `.stl` in millimetres (closed mesh, z up, setting `voxel_mm`), PNG of any view, and an isometric sprite strip from four sides.
+- Import `.vox` files and Minecraft `.schem` schematics (WorldEdit).
+
+**The operation language.** Axes: x right, y up, z towards the viewer; `c` is a palette index and `c: 0` erases. Operations: `voxel`, `voxels`, `box`, `line` (with `r`/`r_to`: a tapered capsule), `prism` (a polygon with thickness: wings, fins, ears), `sphere`/`ellipsoid`, `cylinder`, `layer` (pixel rows on the front, side or top plane), `inflate`, `paint` (recolour the surface seen from a side), `lathe`, `recolor`, `mirror`, `move`, `clear`. Details in `seurat_hoard/voxels.py`.
+
+## How to run it
 
 ```
 python -m venv .venv
@@ -125,14 +45,36 @@ python -m venv .venv
 .venv\Scripts\python -m seurat_hoard
 ```
 
-Opens at http://127.0.0.1:5250. The Hoard Hub starts it like the rest of the family. Data (models, references, renders,
-settings, `mcp-token`) in `data/`. Settings: reading size and colours, review rounds, reasoning effort and thinking
-tokens, painting the pictures onto the shape, camera calibration, lit or flat review views, scenes (actions per
-object, most objects, default size), a fixed OpenAI-compatible model URL instead of the family's, STL and GLB scale.
-WebM spins need ffmpeg on the PATH (or the `imageio-ffmpeg` package); GIF needs nothing.
+It opens at http://127.0.0.1:5250. The Hoard Hub starts it like the rest of the family. Data (models, references, renders, settings, `mcp-token`) lives in `data/`. Settings cover reading size and colours, review rounds, reasoning effort and thinking tokens, painting the pictures onto the shape, camera calibration, lit or flat review views, scene limits (actions per object, most objects, default size), a fixed OpenAI-compatible model URL instead of the family's, and STL and GLB scale. WebM spins need ffmpeg on the PATH (or the `imageio-ffmpeg` package); GIF needs nothing.
 
-Tests: `.venv\Scripts\python -m pytest`.
+## Connection with Faustus and the Hub
 
-## Skills for the agents that connect
+The plugin manifest is `faustus-plugin.json`. The MCP bridge (`mcp_server.py`) exposes the studio to assistants, by group:
+- Models: `model_list`, `model_create`, `model_get`, `model_duplicate`, `model_rename`, `model_resize`, `model_delete`, `model_ops` (edit with operations), `model_program` (run a voxel program, with `sprites`), `model_palette`, `model_dump`, `model_export`, `model_import_vox`, `model_versions`, `model_restore`, `version_note`.
+- Looking and comparing: `model_look` (returns a picture, also from the game overworld cameras and lit from any side), `model_sprite_match`, `model_sprite_calibrate`, `model_spin`.
+- References: `reference_add`, `reference_list`, `reference_look`, `reference_grid`, `reference_frames`, `reference_sheet`, `reference_bytes`, `reference_delete`.
+- Generation: `generate_start`, `generate_status`, `generate_list`, `generate_cancel`, `generate_round`, `model_from_parts`, `model_parts_adjust`, `model_rebuild`.
+- Settings: `settings_get`, `settings_set`.
 
-Seurat takes from the skill library of the family's workspace the procedures its work needs (3D assets for the web, Blender assets, composing images, verifying a result) and hands them to every agent that connects: they are named in what the agent reads on connecting, read with `skills_list` and `skill_read`, and offered as prompts. The `skills` block of `faustus-plugin.json` says which; the copies live in `data/skills/` and follow the library when a skill is improved there.
+**Skills.** Seurat takes from the family's skill library the procedures its work needs (3D assets for the web, Blender assets, composing images, verifying a result) and hands them to every agent that connects: they are named in what the agent reads on connecting, read with `skills_list` and `skill_read`, and offered as prompts. The `skills` block of `faustus-plugin.json` says which; the copies live in `data/skills/` and follow the library.
+
+## Project layout
+
+| Path | Contents |
+|---|---|
+| `seurat_hoard/` | the app: store, voxel engine and operation language, generation loops, parts, scenes, sprite cameras, sheets, lit renderer, exporters, API, static web interface |
+| `seurat_hoard/hoard_link/` | vendored family library |
+| `mcp_server.py` | MCP bridge |
+| `faustus-plugin.json` | plugin manifest |
+| `tests/` | test suite |
+| `data/` | models, references, renders, settings (not tracked) |
+
+## Tests
+
+```
+.venv\Scripts\python -m pytest
+```
+
+## Licence
+
+MIT. Third-party components are listed in `THIRD_PARTY_NOTICES.md`.

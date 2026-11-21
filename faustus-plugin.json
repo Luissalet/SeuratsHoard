@@ -27,6 +27,10 @@
     "round-preview"
   ],
   "x-family": {
+    "isolated_instance": {
+      "data_env": "SEURAT_DATA_DIR",
+      "port_env": "SEURAT_PORT"
+    },
     "copilot": true
   },
   "placeholders": [
